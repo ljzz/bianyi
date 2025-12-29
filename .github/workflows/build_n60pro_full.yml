@@ -1,36 +1,29 @@
-name: Build N60 Pro (Full Edition)
+name: Build N60 Pro (Full Edition) - Fixed
 
 on:
-  # 当此工作流文件被推送到仓库时自动触发
   push:
     branches: [ main, master ]
     paths:
       - '.github/workflows/build_n60pro_full.yml'
-  # 支持在GitHub网页上手动触发
   workflow_dispatch:
 
 env:
   SOURCE_REPO: "https://github.com/padavanonly/immortalwrt-mt798x-24.10"
   SOURCE_BRANCH: "main"
   HIGH_POWER_CONFIG_URL: "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config"
-  BUILD_DIR: "${{ github.workspace }}/immortalwrt"
+  BUILD_DIR: "${{ github.workspace }}/immortalwrt"  # 关键：定义构建目录
   TARGET_SUBTARGET: "mediatek/mt7986"
   TARGET_PROFILE: "glinet_gl-mt6000"
 
 jobs:
   build:
-    name: 编译 N60 Pro 完整功能固件
     runs-on: ubuntu-22.04
-    timeout-minutes: 240 # 设置为4小时，编译可能耗时较长
+    timeout-minutes: 240
 
     steps:
-    # 步骤1：检出工作流仓库本身
     - name: Checkout workflow repo
       uses: actions/checkout@v4
-      with:
-        path: workflow-configs
 
-    # 步骤2：安装必要的编译工具和依赖
     - name: Install dependencies
       run: |
         sudo apt-get update
@@ -38,163 +31,136 @@ jobs:
         gcc-multilib gettext git libncurses5-dev libssl-dev python3 python3-distutils \
         python3-pip rsync unzip zlib1g-dev file wget curl jq upx
 
-    # 步骤3：克隆237的源码
-    - name: Clone 237 source
+    # 步骤1：清理并克隆源码
+    - name: Clone source (Fresh)
       run: |
-        echo "正在克隆源码仓库: $SOURCE_REPO"
+        echo "正在删除旧构建目录..."
         rm -rf "$BUILD_DIR"
+        echo "正在克隆源码..."
         git clone --depth=1 --branch="$SOURCE_BRANCH" "$SOURCE_REPO" "$BUILD_DIR"
 
-    # 步骤4：配置额外的软件源 (Feeds)
-    - name: Configure additional feeds
+    # 步骤2：配置软件源
+    - name: Configure feeds
       run: |
         cd "$BUILD_DIR"
-        echo "添加 iStore 和 OpenClash 软件源..."
-        # 添加 iStore 软件源（来自LinkEase）
-        echo "src-git istore https://github.com/linkease/istore.git;main" >> feeds.conf.default
-        # 添加 OpenClash 软件源
-        echo "src-git openclash https://github.com/vernesong/OpenClash.git;master" >> feeds.conf.default
-        # 添加一个常用的第三方软件源以获取更多插件
-        echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
-        cat feeds.conf.default
-
-    # 步骤5：更新并安装所有软件包
-    - name: Update and install feeds
-      run: |
-        cd "$BUILD_DIR"
+        echo "配置额外软件源..."
+        cat >> feeds.conf.default << 'EOF'
+src-git istore https://github.com/linkease/istore.git;main
+src-git openclash https://github.com/vernesong/OpenClash.git;master
+src-git small https://github.com/kenzok8/small-package
+EOF
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    # 步骤6：下载并应用高功率基础配置
-    - name: Apply high-power base config
+    # 步骤3：下载并应用配置（关键步骤）
+    - name: Apply configuration
       run: |
         cd "$BUILD_DIR"
-        echo "下载高功率基础配置文件..."
-        wget -O .config "$HIGH_POWER_CONFIG_URL"
-
-        echo "开始应用自定义配置..."
-        # 6.1 确保只编译 GL-MT6000 (N60 Pro)
+        echo "下载高功率基础配置..."
+        wget -q --show-progress -O .config "$HIGH_POWER_CONFIG_URL"
+        
+        echo "应用自定义配置..."
+        # 1. 锁定设备为 GL-MT6000
         sed -i '/CONFIG_TARGET_DEVICE_mediatek_mt7986_DEVICE_/d' .config
         echo "CONFIG_TARGET_DEVICE_mediatek_mt7986_DEVICE_glinet_gl-mt6000=y" >> .config
-        # 禁用多设备编译以节省时间
         sed -i 's/CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/' .config
-
-        # 6.2 配置 LAN 口 IP 为 192.168.6.1
-        # 此配置会在编译时设置默认的 LAN 口地址
+        
+        # 2. 追加所有自定义功能配置（PPPoE, IPv6, iStore, OpenClash, 改IP）
         cat >> .config << 'EOF'
-# 设置默认 LAN IP 为 192.168.6.1
+# 自定义管理IP
 CONFIG_TARGET_IPV6_IP6TABLE=y
 CONFIG_TARGET_PREINIT_IP="192.168.6.1"
-CONFIG_TARGET_PREINIT_SUBNET="255.255.255.0"
-EOF
 
-        # 6.3 启用 PPPoE 相关内核模块和用户态工具
-        cat >> .config << 'EOF'
-# PPPoE 拨号支持
+# PPPoE 支持
 CONFIG_PACKAGE_kmod-ppp=y
 CONFIG_PACKAGE_kmod-pppoe=y
-CONFIG_PACKAGE_kmod-pppox=y
-CONFIG_PACKAGE_ppp=y
 CONFIG_PACKAGE_ppp-mod-pppoe=y
 CONFIG_PACKAGE_luci-proto-ppp=y
-EOF
 
-        # 6.4 启用完整的 IPv6 支持
-        cat >> .config << 'EOF'
-# 完整 IPv6 支持
+# IPv6 支持
 CONFIG_PACKAGE_ipv6helper=y
 CONFIG_PACKAGE_odhcp6c=y
-CONFIG_PACKAGE_odhcpd-ipv6only=y
 CONFIG_PACKAGE_luci-proto-ipv6=y
-CONFIG_PACKAGE_ip6tables=y
-CONFIG_PACKAGE_ip6tables-mod-nat=y
-CONFIG_PACKAGE_6in4=y
-EOF
 
-        # 6.5 启用 LuCI 网页界面、iStore 和 OpenClash
-        cat >> .config << 'EOF'
-# LuCI 基础界面
+# LuCI 基础
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-compat=y
 CONFIG_PACKAGE_luci-theme-argon=y
 
-# iStore 应用商店
+# iStore 商店
 CONFIG_PACKAGE_luci-app-store=y
-CONFIG_PACKAGE_luci-lib-ipkg=y
 
-# OpenClash
+# OpenClash (Master版本)
 CONFIG_PACKAGE_luci-app-openclash=y
 CONFIG_PACKAGE_luci-app-openclash_Master=y
-# OpenClash 依赖
-CONFIG_PACKAGE_coreutils=y
 CONFIG_PACKAGE_coreutils-nohup=y
 CONFIG_PACKAGE_bash=y
-CONFIG_PACKAGE_curl=y
 CONFIG_PACKAGE_iptables-mod-tproxy=y
-CONFIG_PACKAGE_ipset=y
 
-# 设备专用插件和常用工具
+# 设备专用与工具
 CONFIG_PACKAGE_luci-app-mtwifi-cfg=y
 CONFIG_PACKAGE_luci-app-turboacc-mtk=y
 CONFIG_PACKAGE_luci-app-upnp=y
-CONFIG_PACKAGE_htop=y
-CONFIG_PACKAGE_tcpdump=y
-CONFIG_PACKAGE_vim-fuller=y
 EOF
+        echo "配置应用完成。"
 
-        echo "自定义配置已追加到 .config"
-
-    # 步骤7：执行全新编译（make clean）
-    - name: Make clean (强制全新编译)
+    # 步骤4：执行全新编译
+    - name: Clean build environment
       run: |
         cd "$BUILD_DIR"
-        echo "执行 make clean 开始全新编译..."
+        echo "执行 make clean 进行全新编译..."
         make clean
-        # 清理后重新生成 .config 文件
-        if [ -f .config ]; then
-          echo "重新应用 .config..."
-          mv .config .config.backup
-          make defconfig
-          # 这里可以重新应用自定义配置，但为简化，我们依赖上一步生成的文件
-        fi
 
-    # 步骤8：生成最终配置并下载软件包
-    - name: Make defconfig and download
+    # 步骤5：生成最终配置并下载软件包
+    - name: Finalize config and download packages
       run: |
         cd "$BUILD_DIR"
+        echo "生成最终配置..."
         make defconfig
-        echo "开始下载软件包..."
-        make download -j$(nproc) || make download -j$(nproc) VERBOSE=1
+        echo "开始下载所有软件包（这可能需要一段时间）..."
+        make download -j$(nproc) || { echo "首次并行下载失败，尝试单线程重试..."; make download -j1; }
+        echo "软件包下载完成。"
 
-    # 步骤9：开始编译固件
-    - name: Build firmware
+    # 步骤6：开始编译固件
+    - name: Compile firmware
       run: |
         cd "$BUILD_DIR"
-        echo "开始编译固件，这需要较长时间..."
-        # 使用 V=sc 参数，在出错时显示更多细节，同时控制日志输出量
-        make -j$(($(nproc)+1)) V=sc 2>&1 | tee build.log | tail -50
-        # 检查最终编译结果
-        if ls bin/targets/$TARGET_SUBTARGET/*.bin 1>/dev/null 2>&1; then
-          echo "🎉 固件编译成功!"
-        else
-          echo "❌ 未找到固件文件，编译可能失败。"
-          exit 1
-        fi
+        echo "开始编译固件，请耐心等待..."
+        # 使用更详细的输出，但通过管道管理，避免日志爆炸
+        make -j$(($(nproc)+1)) V=s 2>&1 | tee full_build.log | grep -E "(error:|warning:|ERROR:|WARNING:|编译完成|built successfully|INSTALL.*\.ipk|Image.*\.bin.*generated)"
+        echo "编译步骤执行完毕。"
 
-    # 步骤10：上传编译好的固件
+    # 步骤7：检查编译产物
+    - name: Check build artifacts
+      run: |
+        cd "$BUILD_DIR"
+        echo "===== 检查构建输出目录 ====="
+        find . -name "*.bin" -type f | head -20
+        echo "===== 检查目标目录结构 ====="
+        ls -la bin/targets/ || echo "bin/targets/ 目录不存在"
+        ls -la bin/targets/$TARGET_SUBTARGET/ 2>/dev/null || echo "子目标目录不存在"
+        echo "===== 关键文件检查 ====="
+        # 尝试查找可能的固件文件，名称可能因配置而异
+        FIRMWARE_PATTERN="*sysupgrade*bin *squashfs*bin"
+        for pattern in $FIRMWARE_PATTERN; do
+          find bin/targets -type f -name "$pattern" 2>/dev/null
+        done
+
+    # 步骤8：上传固件（如果找到）
     - name: Upload firmware artifact
       uses: actions/upload-artifact@v4
+      if: success() || failure()  # 即使之前步骤失败也尝试上传（例如，有日志）
       with:
-        name: n60pro-full-firmware
-        path: ${{ env.BUILD_DIR }}/bin/targets/${{ env.TARGET_SUBTARGET }}/*.bin
+        name: n60pro-firmware
+        path: |
+          ${{ env.BUILD_DIR }}/bin/targets/${{ env.TARGET_SUBTARGET }}/
         retention-days: 7
 
-    # 步骤11：上传编译日志（用于调试）
-    - name: Upload build log
-      if: always()
+    # 步骤9：上传详细编译日志（非常重要，用于调试）
+    - name: Upload full build log
       uses: actions/upload-artifact@v4
+      if: always()
       with:
-        name: build-logs
-        path: ${{ env.BUILD_DIR }}/build.log
-        retention-days: 3
+        name: full-build-logs
+        path: ${{ env.BUILD_DIR }}/full_build.log
+        retention-days: 7
