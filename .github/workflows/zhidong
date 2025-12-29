@@ -1,0 +1,606 @@
+name:zhidong
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/build_n60pro_argon_theme.yml'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '发布标签 (例如: v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+env:
+  SOURCE_REPO: "https://github.com/padavanonly/immortalwrt-mt798x-24.10"
+  SOURCE_BRANCH: "main"
+  HIGH_POWER_CONFIG_URL: "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config"
+  BUILD_DIR: "${{ github.workspace }}/immortalwrt"
+  TARGET_SUBTARGET: "mediatek/mt7986"
+  TARGET_PROFILE: "glinet_gl-mt6000"
+
+jobs:
+  build-and-release:
+    name: 编译并发布固件（Argon主题版）
+    runs-on: ubuntu-22.04
+    timeout-minutes: 210
+    
+    steps:
+    # 步骤1：准备工作区
+    - name: 准备工作区
+      run: |
+        echo "========================================"
+        echo "N60 Pro 编译（Argon主题版）"
+        echo "========================================"
+        echo "开始时间: $(date)"
+        echo "主题选择: Argon 主题（美观现代）"
+        echo "纯净配置: 仅OpenClash + iStore"
+        echo "预配置:"
+        echo "  - 管理IP: 192.168.6.1"
+        echo "  - PPPoE: 15828860970 / 147258"
+        echo "  - WiFi: locust / locust-5G (密码: 36925888)"
+        echo "  - IPv6: 自动启用"
+        echo "========================================"
+
+    # 步骤2：安装编译依赖
+    - name: 安装依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          ccache \
+          clang \
+          flex \
+          bison \
+          g++ \
+          gawk \
+          gcc-multilib \
+          gettext \
+          git \
+          libncurses5-dev \
+          libssl-dev \
+          python3 \
+          python3-distutils \
+          python3-pip \
+          rsync \
+          unzip \
+          zlib1g-dev \
+          file \
+          wget \
+          curl \
+          jq \
+          zip
+
+    # 步骤3：设置缓存
+    - name: 设置编译缓存
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.ccache
+          ${{ github.workspace }}/immortalwrt/dl
+        key: ${{ runner.os }}-openwrt-argon-${{ hashFiles('.github/workflows/build_n60pro_argon_theme.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-argon-
+
+    # 步骤4：克隆源码
+    - name: 克隆237源码
+      run: |
+        echo "清理旧目录并克隆源码..."
+        rm -rf "$BUILD_DIR"
+        git clone --depth=1 --branch="$SOURCE_BRANCH" "$SOURCE_REPO" "$BUILD_DIR"
+        cd "$BUILD_DIR"
+        COMMIT_HASH=$(git rev-parse --short HEAD)
+        COMMIT_DATE=$(git log -1 --format=%cd --date=short)
+        echo "源码版本: $COMMIT_HASH ($COMMIT_DATE)"
+        
+        # 保存版本信息
+        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
+        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
+
+    # 步骤5：配置软件源
+    - name: 配置软件源
+      run: |
+        cd "$BUILD_DIR"
+        echo "配置iStore和OpenClash软件源..."
+        
+        # 添加必要的软件源
+        cat >> feeds.conf.default << 'EOF'
+src-git istore https://github.com/linkease/istore.git;main
+src-git openclash https://github.com/vernesong/OpenClash.git;master
+EOF
+        
+        # 更新并安装feeds
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        ./scripts/feeds install -f luci-app-store
+        ./scripts/feeds install -f luci-app-openclash
+
+    # 步骤6：创建预配置文件
+    - name: 创建预配置文件
+      run: |
+        cd "$BUILD_DIR"
+        echo "创建预配置文件..."
+        
+        # 创建目录结构
+        mkdir -p files/etc/config
+        mkdir -p files/etc/uci-defaults
+        mkdir -p files/root
+        
+        # 1. network配置 (PPPoE + IP地址)
+        cat > files/etc/config/network << 'EOF'
+config interface 'loopback'
+    option ifname 'lo'
+    option proto 'static'
+    option ipaddr '127.0.0.1'
+    option netmask '255.0.0.0'
+
+config interface 'lan'
+    option ifname 'eth1'
+    option proto 'static'
+    option ipaddr '192.168.6.1'
+    option netmask '255.255.255.0'
+    option ip6assign '60'
+
+config interface 'wan'
+    option ifname 'eth0'
+    option proto 'pppoe'
+    option username '15828860970'
+    option password '147258'
+    option ipv6 'auto'
+
+config interface 'wan6'
+    option ifname '@wan'
+    option proto 'dhcpv6'
+    option reqaddress 'try'
+    option reqprefix 'auto'
+EOF
+
+        # 2. wireless配置 (WiFi名称和密码)
+        cat > files/etc/config/wireless << 'EOF'
+config wifi-device 'radio0'
+    option type 'mac80211'
+    option path '1e140000.pcie'
+    option channel '36'
+    option band '5g'
+    option htmode 'HE160'
+    option disabled '0'
+
+config wifi-iface 'default_radio0'
+    option device 'radio0'
+    option network 'lan'
+    option mode 'ap'
+    option ssid 'locust-5G'
+    option encryption 'psk2'
+    option key '36925888'
+
+config wifi-device 'radio1'
+    option type 'mac80211'
+    option path '18000000.wmac'
+    option channel '11'
+    option band '2g'
+    option htmode 'HE40'
+    option disabled '0'
+
+config wifi-iface 'default_radio1'
+    option device 'radio1'
+    option network 'lan'
+    option mode 'ap'
+    option ssid 'locust'
+    option encryption 'psk2'
+    option key '36925888'
+EOF
+
+        # 3. 系统配置
+        cat > files/etc/config/system << 'EOF'
+config system
+    option hostname 'N60Pro'
+    option timezone 'CST-8'
+    option zonename 'Asia/Shanghai'
+    option log_size '64'
+
+config timeserver 'ntp'
+    option enabled '1'
+    list server 'ntp.aliyun.com'
+    list server 'time1.cloud.tencent.com'
+    list server 'cn.ntp.org.cn'
+EOF
+
+        # 4. Argon主题配置
+        cat > files/etc/config/argon << 'EOF'
+config global
+    option blur '1'
+    option shadow '1'
+    option transparency '1'
+    option background '/etc/argon/background.jpg'
+EOF
+
+        # 5. 首次启动脚本
+        cat > files/etc/uci-defaults/99-argon-setup << 'EOF'
+#!/bin/sh
+
+# 应用所有配置
+uci commit network
+uci commit wireless
+uci commit system
+
+# 设置Argon主题为默认
+uci set luci.main.mediaurlbase='/luci-static/argon'
+uci commit luci
+
+# 启用IPv6
+uci set firewall.@defaults[0].disable_ipv6='0'
+uci commit firewall
+
+echo "Argon主题版固件预配置完成" > /tmp/argon-setup.log
+
+exit 0
+EOF
+        chmod +x files/etc/uci-defaults/99-argon-setup
+        
+        echo "✅ 预配置文件创建完成"
+
+    # 步骤7：应用编译配置
+    - name: 应用编译配置
+      run: |
+        cd "$BUILD_DIR"
+        
+        echo "下载高功率基础配置..."
+        curl -L -s -o .config "$HIGH_POWER_CONFIG_URL"
+        
+        if [ ! -s .config ]; then
+          echo "❌ 配置文件下载失败"
+          exit 1
+        fi
+        
+        echo "应用自定义编译选项..."
+        
+        # 1. 设备锁定
+        sed -i '/CONFIG_TARGET_DEVICE_mediatek_mt7986_DEVICE_/d' .config
+        echo "CONFIG_TARGET_DEVICE_mediatek_mt7986_DEVICE_glinet_gl-mt6000=y" >> .config
+        sed -i 's/CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/' .config
+        
+        # 2. 基础功能
+        cat >> .config << 'EOF'
+# 基础网络
+CONFIG_TARGET_IPV6_IP6TABLE=y
+
+# PPPoE支持
+CONFIG_PACKAGE_kmod-ppp=y
+CONFIG_PACKAGE_kmod-pppoe=y
+CONFIG_PACKAGE_ppp-mod-pppoe=y
+CONFIG_PACKAGE_luci-proto-ppp=y
+
+# IPv6支持
+CONFIG_PACKAGE_ipv6helper=y
+CONFIG_PACKAGE_odhcp6c=y
+CONFIG_PACKAGE_odhcpd-ipv6only=y
+CONFIG_PACKAGE_luci-proto-ipv6=y
+CONFIG_PACKAGE_ip6tables=y
+CONFIG_PACKAGE_ip6tables-mod-nat=y
+
+# LuCI基础 + Argon主题
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-compat=y
+CONFIG_PACKAGE_luci-lib-ipkg=y
+CONFIG_PACKAGE_luci-theme-argon=y
+
+# iStore应用商店
+CONFIG_PACKAGE_luci-app-store=y
+
+# OpenClash (Master稳定版)
+CONFIG_PACKAGE_luci-app-openclash=y
+CONFIG_PACKAGE_luci-app-openclash_Master=y
+
+# OpenClash依赖
+CONFIG_PACKAGE_coreutils=y
+CONFIG_PACKAGE_coreutils-nohup=y
+CONFIG_PACKAGE_bash=y
+CONFIG_PACKAGE_iptables-mod-tproxy=y
+CONFIG_PACKAGE_ipset=y
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_libopenssl=y
+CONFIG_PACKAGE_libcap=y
+CONFIG_PACKAGE_libcap-bin=y
+
+# 设备专用
+CONFIG_PACKAGE_luci-app-mtwifi-cfg=y
+CONFIG_PACKAGE_luci-app-turboacc-mtk=y
+
+# 明确禁用不需要的组件
+# CONFIG_PACKAGE_luci-app-adblock is not set
+# CONFIG_PACKAGE_luci-app-dockerman is not set
+# CONFIG_PACKAGE_docker-ce is not set
+# CONFIG_PACKAGE_luci-app-upnp is not set
+# CONFIG_PACKAGE_luci-app-ddns is not set
+# CONFIG_PACKAGE_luci-theme-bootstrap is not set
+# CONFIG_PACKAGE_luci-theme-design is not set
+EOF
+        
+        echo "✅ 编译配置应用完成"
+
+    # 步骤8：生成最终配置
+    - name: 生成最终配置
+      run: |
+        cd "$BUILD_DIR"
+        echo "生成最终配置..."
+        make defconfig
+        
+        echo "配置摘要:"
+        ./scripts/diffconfig.sh | head -40
+
+    # 步骤9：全新编译准备
+    - name: 全新编译准备
+      run: |
+        cd "$BUILD_DIR"
+        echo "执行全新编译..."
+        make clean
+        
+        echo "下载软件包..."
+        timeout 2400 make download -j$(nproc) || {
+          echo "并行下载失败，尝试单线程..."
+          make download -j1
+        }
+        
+        DL_COUNT=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" \) 2>/dev/null | wc -l)
+        echo "✅ 已下载 $DL_COUNT 个软件包"
+
+    # 步骤10：编译固件
+    - name: 编译固件
+      run: |
+        cd "$BUILD_DIR"
+        
+        echo "🚀 开始编译Argon主题版固件..."
+        START_TIME=$(date +%s)
+        
+        # 优化编译线程数
+        CPU_CORES=$(nproc)
+        if [ $CPU_CORES -gt 8 ]; then
+          MAKE_JOBS=8
+        elif [ $CPU_CORES -gt 4 ]; then
+          MAKE_JOBS=4
+        else
+          MAKE_JOBS=$CPU_CORES
+        fi
+        
+        echo "使用编译线程数: $MAKE_JOBS"
+        
+        # 编译，输出关键信息
+        make -j$MAKE_JOBS V=s 2>&1 | tee build_output.log | grep -E \
+          "(error:|warning:|ERROR:|WARNING:|Image.*built|Creating.*sysupgrade|make.*Error|make.*Stop|argon|theme)"
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        echo "编译耗时: $(($DURATION / 60))分$(($DURATION % 60))秒"
+
+    # 步骤11：检查编译结果
+    - name: 检查编译结果
+      run: |
+        cd "$BUILD_DIR"
+        
+        echo "检查编译结果..."
+        
+        # 查找固件文件
+        TARGET_PATH="bin/targets/$TARGET_SUBTARGET"
+        if [ -d "$TARGET_PATH" ]; then
+          FIRMWARE_FILE=$(find "$TARGET_PATH" -name "*sysupgrade*.bin" -o -name "*squashfs*.bin" | head -1)
+          
+          if [ -n "$FIRMWARE_FILE" ] && [ -f "$FIRMWARE_FILE" ]; then
+            FIRMWARE_NAME=$(basename "$FIRMWARE_FILE")
+            FIRMWARE_SIZE=$(ls -lh "$FIRMWARE_FILE" | awk '{print $5}')
+            
+            echo "✅ 固件编译成功!"
+            echo "固件名称: $FIRMWARE_NAME"
+            echo "固件大小: $FIRMWARE_SIZE"
+            
+            # 设置输出变量
+            echo "FIRMWARE_NAME=$FIRMWARE_NAME" >> $GITHUB_ENV
+            echo "FIRMWARE_FILE=$FIRMWARE_FILE" >> $GITHUB_ENV
+            echo "FIRMWARE_PATH=$TARGET_PATH" >> $GITHUB_ENV
+            
+            # 检查Argon主题是否包含
+            echo "检查Argon主题:"
+            if grep -q "CONFIG_PACKAGE_luci-theme-argon=y" .config; then
+              echo "✅ Argon主题已启用"
+            else
+              echo "❌ Argon主题未启用"
+            fi
+            
+            # 列出生成的文件
+            echo "生成的文件列表:"
+            find "$TARGET_PATH" -type f -name "*.bin" -o -name "*.manifest" -o -name "*.sha256sum" | sort
+          else
+            echo "❌ 未找到固件文件"
+            exit 1
+          fi
+        else
+          echo "❌ 目标目录不存在: $TARGET_PATH"
+          exit 1
+        fi
+
+    # 步骤12：创建固件信息文件
+    - name: 创建固件信息
+      run: |
+        echo "创建固件信息文件..."
+        
+        cat > firmware-info.md << EOF
+# N60 Pro Argon主题版固件信息
+
+## 基本参数
+- **设备型号**: GL.iNet GL-MT6000 (N60 Pro)
+- **芯片平台**: MediaTek MT7986
+- **无线芯片**: MT7976 (iPaiLNA 高功率)
+- **界面主题**: Argon (现代美观)
+
+## 编译信息
+- **源码版本**: 237's immortalwrt-mt798x-24.10
+- **提交哈希**: ${{ env.COMMIT_HASH }}
+- **提交日期**: ${{ env.COMMIT_DATE }}
+- **编译时间**: $(date "+%Y-%m-%d %H:%M:%S")
+- **编译编号**: ${{ github.run_number }}
+- **主题版本**: Argon 主题
+
+## 预配置详情
+
+### 网络配置
+- **管理地址**: 192.168.6.1
+- **PPPoE账号**: 15828860970
+- **PPPoE密码**: 147258
+- **IPv6支持**: 自动启用
+
+### WiFi配置
+- **2.4GHz网络**:
+  - SSID: locust
+  - 密码: 36925888
+  - 加密: WPA2-PSK
+- **5GHz网络**:
+  - SSID: locust-5G
+  - 密码: 36925888
+  - 加密: WPA2-PSK
+
+### 预装插件
+1. **iStore应用商店** - 服务菜单中访问
+2. **OpenClash** - 服务菜单中访问 (需配置订阅)
+
+### 主题特性
+- ✅ Argon 现代主题
+- ✅ 透明效果
+- ✅ 毛玻璃模糊效果
+- ✅ 阴影效果
+- ✅ 响应式设计
+
+### 固件文件
+- **文件名**: ${{ env.FIRMWARE_NAME }}
+- **编译时间**: $(date)
+
+## 刷机说明
+1. 下载本固件文件
+2. 访问当前路由器管理界面 (默认192.168.1.1)
+3. 进入"系统" → "备份/升级"
+4. 选择本固件，**不保留配置**刷入
+5. 等待路由器重启 (约3分钟)
+6. 使用新地址 http://192.168.6.1 访问
+
+## 首次使用指南
+1. **连接WiFi**: locust (密码: 36925888) 或 locust-5G
+2. **访问管理**: 浏览器打开 http://192.168.6.1
+3. **设置密码**: 首次访问设置管理员密码
+4. **体验主题**: 享受Argon主题的现代界面
+5. **配置插件**: 
+   - iStore: 服务 → iStore应用商店
+   - OpenClash: 服务 → OpenClash (需配置订阅)
+
+## 注意事项
+- 刷机前请备份重要配置
+- 确保设备型号为 GL-MT6000
+- Argon主题需要现代浏览器支持
+- WiFi已预配置密码，刷机后即可连接
+EOF
+        
+        echo "固件信息文件已创建"
+
+    # 步骤13：自动创建GitHub Release
+    - name: 创建GitHub Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.event.inputs.tag_name || 'v1.0.0' }}
+        name: "N60 Pro Argon主题版 ${{ github.event.inputs.tag_name || 'v1.0.0' }}"
+        body: |
+          # N60 Pro Argon主题版固件
+          
+          ## 🎨 主题特色
+          - **界面主题**: Argon 现代主题
+          - **视觉效果**: 透明、模糊、阴影
+          - **响应式设计**: 适配各种设备屏幕
+          
+          ## 🚀 固件信息
+          - **编译时间**: $(date "+%Y-%m-%d %H:%M:%S")
+          - **源码版本**: ${{ env.COMMIT_HASH }} (${{ env.COMMIT_DATE }})
+          - **编译编号**: ${{ github.run_number }}
+          - **设备型号**: GL.iNet GL-MT6000 (N60 Pro)
+          
+          ## 📋 预配置详情
+          
+          ### 网络设置
+          - **管理地址**: `192.168.6.1`
+          - **PPPoE账号**: `15828860970`
+          - **PPPoE密码**: `147258`
+          - **IPv6支持**: 自动启用
+          
+          ### WiFi设置
+          - **2.4GHz**: SSID=`locust`, 密码=`36925888`
+          - **5GHz**: SSID=`locust-5G`, 密码=`36925888`
+          
+          ### 预装插件
+          1. **iStore应用商店** - 一站式插件管理
+          2. **OpenClash** - 强大的代理工具
+          
+          ## 🛠️ 刷机步骤
+          1. 下载本页面中的固件文件 (.bin)
+          2. 进入路由器原管理界面 (默认192.168.1.1)
+          3. 系统 → 备份/升级 → 刷写固件
+          4. **重要**: 取消"保留配置"选项
+          5. 选择本固件，开始刷机
+          6. 等待3-5分钟自动重启
+          
+          ## 🔧 首次使用
+          1. 连接WiFi: **locust** (密码: 36925888)
+          2. 访问管理: http://192.168.6.1
+          3. 设置管理员密码
+          4. 享受Argon主题的现代界面
+          
+          ## ⚠️ 注意事项
+          - 刷机有风险，请确保设备型号正确
+          - 建议刷机前备份重要配置
+          - Argon主题需要现代浏览器支持
+          - 首次启动可能需要2-3分钟应用配置
+          
+          ## 📊 编译状态
+          ![编译状态](https://github.com/${{ github.repository }}/actions/workflows/build_n60pro_argon_theme.yml/badge.svg)
+          
+          ---
+          
+          **更多详细信息请查看附件的 firmware-info.md**
+        draft: false
+        prerelease: false
+        files: |
+          ${{ env.BUILD_DIR }}/bin/targets/${{ env.TARGET_SUBTARGET }}/*.bin
+          firmware-info.md
+
+    # 步骤14：上传编译日志
+    - name: 上传编译日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs-argon-${{ github.run_number }}
+        path: |
+          ${{ env.BUILD_DIR }}/build_output.log
+          ${{ env.BUILD_DIR }}/.config
+        retention-days: 7
+
+    # 步骤15：编译完成通知
+    - name: 编译完成通知
+      if: success()
+      run: |
+        echo "========================================"
+        echo "🎉 Argon主题版固件编译与发布完成!"
+        echo "========================================"
+        echo "主题特色: Argon 现代主题"
+        echo "预装插件: iStore + OpenClash"
+        echo "预配置: PPPoE + WiFi + IPv6"
+        echo ""
+        echo "发布地址:"
+        echo "https://github.com/${{ github.repository }}/releases/tag/${{ github.event.inputs.tag_name || 'v1.0.0' }}"
+        echo ""
+        echo "编译信息:"
+        echo "- 运行ID: ${{ github.run_id }}"
+        echo "- 运行号: ${{ github.run_number }}"
+        echo "- 固件文件: ${{ env.FIRMWARE_NAME }}"
+        echo "- 源码版本: ${{ env.COMMIT_HASH }}"
+        echo "- 主题: Argon"
+        echo "========================================"
