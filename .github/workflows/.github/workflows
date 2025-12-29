@@ -1,0 +1,326 @@
+name: Build N60 Pro with OpenClash, PPPoE & IPv6
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: '全新编译'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      openclash_version:
+        description: 'OpenClash版本'
+        required: false
+        default: 'master'
+        type: choice
+        options:
+          - 'master'
+          - 'dev'
+          - 'tun'
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/n60pro-openclash-build.yml'
+
+env:
+  SOURCE_REPO: "https://github.com/padavanonly/immortalwrt-mt798x-24.10"
+  SOURCE_BRANCH: "main"
+  HIGH_POWER_CONFIG: "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config"
+  BUILD_DIR: "${{ github.workspace }}/immortalwrt"
+  TARGET_SUBTARGET: "mediatek/mt7986"
+  TARGET_PROFILE: "glinet_gl-mt6000"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    
+    steps:
+    - name: 检查代码
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+
+    - name: 安装编译依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential ccache clang flex bison g++ gawk \
+          gcc-multilib gettext git libncurses5-dev libssl-dev \
+          python3 python3-distutils python3-pip \
+          rsync unzip zlib1g-dev file wget curl jq \
+          upx p7zip-full zip
+
+    - name: 设置ccache缓存
+      uses: hendrikmuhs/ccache-action@v1.3
+      with:
+        key: n60pro-${{ github.run_id }}
+        max-size: '2G'
+
+    - name: 克隆237源码
+      run: |
+        echo "正在克隆237源码..."
+        rm -rf "$BUILD_DIR" 2>/dev/null || true
+        git clone --depth 1 --branch "$SOURCE_BRANCH" "$SOURCE_REPO" "$BUILD_DIR"
+        cd "$BUILD_DIR"
+        echo "源码版本: $(git log -1 --oneline)"
+
+    - name: 添加OpenClash feed源
+      run: |
+        cd "$BUILD_DIR"
+        echo "添加OpenClash和其他必要feed源..."
+        
+        # 添加OpenClash feed (237源码可能已包含，但确保添加)
+        if ! grep -q "openclash" feeds.conf.default; then
+          echo "src-git openclash https://github.com/vernesong/OpenClash.git" >> feeds.conf.default
+          echo "✅ 已添加OpenClash feed"
+        fi
+        
+        # 添加其他有用的feed源
+        if ! grep -q "kenzok8" feeds.conf.default; then
+          echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
+        fi
+        
+        if ! grep -q "small8" feeds.conf.default; then
+          echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
+        fi
+
+    - name: 更新并安装所有feeds
+      run: |
+        cd "$BUILD_DIR"
+        echo "更新feeds..."
+        ./scripts/feeds update -a
+        echo "安装feeds..."
+        ./scripts/feeds install -a
+
+    - name: 下载并应用高功率配置
+      run: |
+        cd "$BUILD_DIR"
+        echo "下载高功率配置文件..."
+        curl -L -o .config "$HIGH_POWER_CONFIG"
+        
+        # 只编译N60 Pro (GL-MT6000)
+        sed -i '/CONFIG_TARGET_DEVICE_mediatek_mt7986_DEVICE_/d' .config
+        echo "CONFIG_TARGET_DEVICE_mediatek_mt7986_DEVICE_glinet_gl-mt6000=y" >> .config
+        sed -i 's/CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/' .config
+        
+        echo "✅ 基础配置已应用"
+
+    - name: 配置PPPoE、IPv6和OpenClash
+      run: |
+        cd "$BUILD_DIR"
+        
+        echo "=== 配置PPPoE、IPv6和OpenClash插件 ==="
+        
+        # 启用PPPoE支持
+        echo "# PPPoE配置" >> .config
+        echo "CONFIG_PACKAGE_kmod-ppp=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-pppox=y" >> .config
+        echo "CONFIG_PACKAGE_ppp=y" >> .config
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+        
+        # 启用IPv6完整支持
+        echo "# IPv6配置" >> .config
+        echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
+        echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
+        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
+        echo "CONFIG_PACKAGE_6in4=y" >> .config
+        echo "CONFIG_PACKAGE_6rd=y" >> .config
+        echo "CONFIG_PACKAGE_6to4=y" >> .config
+        echo "CONFIG_PACKAGE_ds-lite=y" >> .config
+        echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+        echo "CONFIG_PACKAGE_ip6tables-mod-nat=y" >> .config
+        echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
+        
+        # 启用OpenClash
+        echo "# OpenClash配置" >> .config
+        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+        
+        # OpenClash依赖
+        echo "CONFIG_PACKAGE_coreutils=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils-nohup=y" >> .config
+        echo "CONFIG_PACKAGE_bash=y" >> .config
+        echo "CONFIG_PACKAGE_curl=y" >> .config
+        echo "CONFIG_PACKAGE_ca-certificates=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-tproxy=y" >> .config
+        echo "CONFIG_PACKAGE_ipset=y" >> .config
+        echo "CONFIG_PACKAGE_libopenssl=y" >> .config
+        echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+        
+        # 选择OpenClash版本
+        OPENCLASH_VERSION="${{ github.event.inputs.openclash_version }}"
+        if [ "$OPENCLASH_VERSION" = "dev" ]; then
+          echo "CONFIG_PACKAGE_luci-app-openclash_Dev=y" >> .config
+        elif [ "$OPENCLASH_VERSION" = "tun" ]; then
+          echo "CONFIG_PACKAGE_luci-app-openclash_TUN=y" >> .config
+        else
+          echo "CONFIG_PACKAGE_luci-app-openclash_Master=y" >> .config
+        fi
+        
+        # 启用LuCI必要组件
+        echo "# LuCI基础配置" >> .config
+        echo "CONFIG_PACKAGE_luci=y" >> .config
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+        
+        # N60 Pro专用插件
+        echo "CONFIG_PACKAGE_luci-app-mtwifi-cfg=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-turboacc-mtk=y" >> .config
+        
+        # 其他实用工具
+        echo "# 实用工具" >> .config
+        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ddns=y" >> .config
+        echo "CONFIG_PACKAGE_htop=y" >> .config
+        echo "CONFIG_PACKAGE_nano=y" >> .config
+        echo "CONFIG_PACKAGE_tcpdump=y" >> .config
+        
+        echo "✅ PPPoE、IPv6和OpenClash配置完成"
+
+    - name: 安装OpenClash依赖包
+      run: |
+        cd "$BUILD_DIR"
+        echo "安装OpenClash依赖..."
+        
+        # 确保OpenClash依赖包已安装
+        ./scripts/feeds install -f luci-app-openclash
+        ./scripts/feeds install -f luci-app-mtwifi-cfg
+        ./scripts/feeds install -f luci-app-turboacc-mtk
+        
+        echo "✅ 依赖包安装完成"
+
+    - name: 生成最终配置
+      run: |
+        cd "$BUILD_DIR"
+        echo "生成最终配置..."
+        
+        # 生成默认配置
+        make defconfig
+        
+        echo "=== 配置摘要 ==="
+        ./scripts/diffconfig.sh | head -50
+        
+        # 验证关键配置
+        echo "=== 关键配置检查 ==="
+        echo "OpenClash: $(grep -c 'CONFIG_PACKAGE_luci-app-openclash=y' .config)"
+        echo "PPPoE: $(grep -c 'CONFIG_PACKAGE_kmod-pppoe=y' .config)"
+        echo "IPv6: $(grep -c 'CONFIG_PACKAGE_ipv6helper=y' .config)"
+
+    - name: 下载软件包
+      run: |
+        cd "$BUILD_DIR"
+        echo "下载软件包..."
+        
+        # 并行下载，失败后重试
+        timeout 1500 make download -j$(nproc) || {
+          echo "并行下载超时，尝试单线程下载..."
+          make download -j1
+        }
+        
+        # 清理损坏的小文件
+        find dl -size -1024c -delete 2>/dev/null || true
+        
+        echo "✅ 软件包下载完成"
+
+    - name: 编译固件
+      run: |
+        cd "$BUILD_DIR"
+        
+        # 记录开始时间
+        START_TIME=$(date +%s)
+        echo "开始编译 N60 Pro + OpenClash + PPPoE + IPv6 固件..."
+        echo "开始时间: $(date)"
+        
+        # 是否执行全新编译
+        if [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
+          echo "执行全新编译..."
+          make clean
+          make download -j$(nproc)
+        fi
+        
+        # 开始编译（限制详细输出以避免日志过大）
+        echo "使用线程数: $(nproc)"
+        make -j$(nproc) V=s 2>&1 | grep -E "(error:|warning:|ERROR:|WARNING:|编译完成|built successfully|INSTALL|mkdir|Compiling)" || true
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        echo "========================================"
+        echo "✅ 编译完成!"
+        echo "总耗时: $(($DURATION / 60))分钟 $(($DURATION % 60))秒"
+        echo "完成时间: $(date)"
+        echo "========================================"
+
+    - name: 检查编译结果
+      run: |
+        cd "$BUILD_DIR"
+        
+        echo "检查编译结果..."
+        
+        # 查找生成的固件
+        FIRMWARE_COUNT=0
+        FIRMWARE_FILES=""
+        
+        if [ -d "bin/targets/$TARGET_SUBTARGET" ]; then
+          FIRMWARE_FILES=$(find bin/targets/$TARGET_SUBTARGET -name "*.bin" -type f 2>/dev/null)
+          FIRMWARE_COUNT=$(echo "$FIRMWARE_FILES" | wc -l)
+        fi
+        
+        if [ "$FIRMWARE_COUNT" -gt 0 ]; then
+          echo "✅ 发现 $FIRMWARE_COUNT 个固件文件:"
+          echo "$FIRMWARE_FILES" | while read file; do
+            SIZE=$(ls -lh "$file" | awk '{print $5}')
+            echo "  - $(basename "$file") ($SIZE)"
+          done
+        else
+          echo "❌ 未找到固件文件!"
+          echo "编译可能失败，请检查日志"
+          exit 1
+        fi
+
+    - name: 上传固件到Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: n60pro-openclash-pppoe-ipv6
+        path: |
+          ${{ env.BUILD_DIR }}/bin/targets/${{ env.TARGET_SUBTARGET }}/*.bin
+          ${{ env.BUILD_DIR }}/.config
+        retention-days: 30
+
+    - name: 创建功能清单
+      run: |
+        cd "$BUILD_DIR"
+        
+        echo "# N60 Pro 高功率固件功能清单" > features.txt
+        echo "# 编译时间: $(date)" >> features.txt
+        echo "# 固件版本: ${{ github.run_number }}" >> features.txt
+        echo "" >> features.txt
+        
+        echo "## 核心功能" >> features.txt
+        echo "- 237源码高功率配置" >> features.txt
+        echo "- OpenClash ${{ github.event.inputs.openclash_version }} 版本" >> features.txt
+        echo "- PPPoE拨号支持" >> features.txt
+        echo "- 完整IPv6支持" >> features.txt
+        echo "" >> features.txt
+        
+        echo "## 已安装插件" >> features.txt
+        grep "^CONFIG_PACKAGE_luci-app-" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✓/' >> features.txt
+        echo "" >> features.txt
+        
+        echo "## 网络功能" >> features.txt
+        grep -E "^CONFIG_PACKAGE_(kmod-ppp|kmod-pppoe|ipv6helper|odhcp)" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✓/' >> features.txt
+        
+        echo "功能清单已生成"
+
+    - name: 上传功能清单
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-info
+        path: |
+          ${{ env.BUILD_DIR }}/features.txt
+        retention-days: 7
