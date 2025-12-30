@@ -131,6 +131,7 @@ EOF
         mkdir -p files/etc/config
         mkdir -p files/etc/uci-defaults
         
+        # 网络配置
         cat > files/etc/config/network << 'EOF'
 config interface 'loopback'
     option device 'lo'
@@ -172,6 +173,7 @@ config interface 'wan6'
     option reqprefix 'auto'
 EOF
         
+        # 无线配置
         cat > files/etc/config/wireless << 'EOF'
 config wifi-device 'radio0'
     option type 'mac80211'
@@ -212,6 +214,7 @@ config wifi-iface 'default_radio1'
     option wpa_disable_eapol_key_retries '1'
 EOF
         
+        # 系统配置
         cat > files/etc/config/system << 'EOF'
 config system
     option hostname 'locust-router'
@@ -223,22 +226,9 @@ config timeserver 'ntp'
     list server 'ntp.aliyun.com'
     list server 'time1.cloud.tencent.com'
     list server 'cn.ntp.org.cn'
-
-config led 'led_usb3'
-    option name 'USB3'
-    option sysfs 'mt7981:green:usb3'
-    option trigger 'usbdev'
-    option dev '1-1'
-    option interval '50'
-
-config led 'led_wan'
-    option name 'WAN'
-    option sysfs 'mt7981:green:wan'
-    option trigger 'netdev'
-    option dev 'wan'
-    option mode 'link tx rx'
 EOF
         
+        # DHCP配置
         cat > files/etc/config/dhcp << 'EOF'
 config dnsmasq
     option domainneeded '1'
@@ -276,34 +266,23 @@ config dhcp 'lan'
 config dhcp 'wan'
     option interface 'wan'
     option ignore '1'
-
-config odhcpd 'odhcpd'
-    option maindhcp '0'
-    option leasefile '/tmp/hosts/odhcpd'
-    option leasetrigger '/usr/sbin/odhcpd-update'
-    option loglevel '4'
 EOF
         
+        # 启动脚本
         cat > files/etc/uci-defaults/99-custom-config << 'EOF'
 #!/bin/sh
-
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
-
 uci set network.wan.ipv6='auto'
 uci set network.wan6.proto='dhcpv6'
 uci set network.wan6.reqaddress='try'
 uci set network.wan6.reqprefix='auto'
 uci commit network
-
 uci set firewall.@defaults[0].drop_invalid='0'
 uci commit firewall
-
 /etc/init.d/network restart
 /etc/init.d/firewall restart
-
 rm -f /etc/uci-defaults/99-custom-config
-
 exit 0
 EOF
         
