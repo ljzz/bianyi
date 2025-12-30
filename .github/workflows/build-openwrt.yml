@@ -1,78 +1,48 @@
 name: Build N60 PRO Firmware
-
-on:
-  workflow_dispatch:
-    inputs:
-      clean_build:
-        description: 'Clean build'
-        required: false
-        default: 'false'
-        type: string
-
-env:
-  SOURCE_URL: "https://github.com/padavanonly/immortalwrt-mt798x-24.10"
-
+on: workflow_dispatch
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 200
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Setup environment
+    - uses: actions/checkout@v4
+    - name: Setup Environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip rsync unzip zlib1g-dev file wget curl
-
-    - name: Clone source
+        sudo apt-get install -y build-essential git wget python3
+    - name: Clone Source
       run: |
-        git clone --depth 1 --branch main $SOURCE_URL openwrt
+        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x-24.10 openwrt
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-
-    - name: Create basic config
+    - name: Create Config
       run: |
         cd openwrt
-        # 使用多个echo命令创建.config文件，完全避免heredoc
-        echo "CONFIG_TARGET_MEDIATEK=y" > .config
+        # 选择目标设备 (N60 PRO)
+        echo "CONFIG_TARGET_MEDIATEK_FILOGIC_DEVICE_CMCC_N60_PRO=y" > .config
         echo "CONFIG_TARGET_MEDIATEK_FILOGIC=y" >> .config
-        echo "CONFIG_TARGET_MEDIATEK_FILOGIC_DEVICE_CMCC_N60_PRO=y" >> .config
-        echo "CONFIG_TARGET_PROFILE=\"CMCC N60 PRO\"" >> .config
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=512" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-
-    - name: Configure packages
-      run: |
-        cd openwrt
+        # 添加您要的软件包
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-istore=y" >> .config
-        echo "CONFIG_PACKAGE_bash=y" >> .config
-        echo "CONFIG_PACKAGE_coreutils-nohup=y" >> .config
-        echo "CONFIG_PACKAGE_curl=y" >> .config
+        # 移除不要的软件包
         echo "CONFIG_PACKAGE_luci-app-adblock=n" >> .config
         echo "CONFIG_PACKAGE_luci-app-docker=n" >> .config
+        # 应用配置
         make defconfig
-
-    - name: Create network config
+    - name: Set Network Config
       run: |
         mkdir -p openwrt/files/etc/uci-defaults
-        # 使用Python创建配置文件，避免YAML解析问题
-        python3 -c "
-config = '''#!/bin/sh
+        # 使用Python创建配置文件，避免YAML heredoc
+        python3 << "PY_EOF"
+config_content = """#!/bin/sh
 uci set network.lan.ipaddr='192.168.6.1'
 uci set network.lan.netmask='255.255.255.0'
-uci delete network.wan 2>/dev/null || true
-uci set network.wan=interface
 uci set network.wan.proto='pppoe'
 uci set network.wan.username='15828860970'
 uci set network.wan.password='147258'
 uci set network.wan.ipv6='auto'
 uci set dhcp.lan.dhcpv6='server'
-uci set dhcp.lan.ra='server'
 uci set wireless.default_radio0.ssid='locust'
 uci set wireless.default_radio0.key='36925888'
 uci set wireless.default_radio0.encryption='psk2'
@@ -81,57 +51,24 @@ uci set wireless.default_radio1.key='36925888'
 uci set wireless.default_radio1.encryption='psk2'
 uci commit
 exit 0
-'''
+"""
 with open('openwrt/files/etc/uci-defaults/99-custom', 'w') as f:
-    f.write(config)
-"
+    f.write(config_content)
+PY_EOF
         chmod +x openwrt/files/etc/uci-defaults/99-custom
-
-    - name: Download dependencies
+    - name: Build Firmware
       run: |
         cd openwrt
-        make download -j$(nproc) || make download -j2
-
-    - name: Compile firmware
+        make download
+        make -j2
+    - name: Save Firmware
       run: |
-        cd openwrt
-        if [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
-          make clean
-        fi
-        make -j$(nproc) || make -j$(($(nproc)/2)) || make -j1 V=s
-
-    - name: Find firmware
-      id: find
-      run: |
-        cd openwrt
-        FIRMWARE_PATH=$(find bin/targets -name "*cmcc_n60pro*sysupgrade.bin" -type f 2>/dev/null | head -1)
-        if [ -z "$FIRMWARE_PATH" ]; then
-          FIRMWARE_PATH=$(find bin/targets -name "*n60pro*.bin" -type f 2>/dev/null | head -1)
-        fi
-        if [ -z "$FIRMWARE_PATH" ]; then
-          echo "Listing all firmware files:"
-          find bin/targets -name "*.bin" -type f 2>/dev/null | head -10
-          exit 1
-        fi
-        FIRMWARE_NAME="immortalwrt-n60pro-$(date +%Y%m%d-%H%M).bin"
-        cp "$FIRMWARE_PATH" "/tmp/$FIRMWARE_NAME"
-        echo "name=$FIRMWARE_NAME" >> $GITHUB_OUTPUT
-
-    - name: Upload to repo
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        git clone https://x-access-token:$GITHUB_TOKEN@github.com/ljzz/bianyi.git repo
-        cd repo
-        mkdir -p firmware
-        cp /tmp/immortalwrt-n60pro-*.bin firmware/ 2>/dev/null || true
-        echo "# N60 PRO Firmware" > firmware/README.md
-        echo "Built: $(date)" >> firmware/README.md
-        echo "Admin: 192.168.6.1" >> firmware/README.md
-        echo "WiFi: locust / locust-5G" >> firmware/README.md
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
-        git add firmware/
-        git commit -m "Update firmware $(date +%Y%m%d-%H%M%S)"
-        git push origin main || echo "Push failed or no changes"
-        echo "Firmware at: https://github.com/ljzz/bianyi/tree/main/firmware"
+        mkdir -p firmware_output
+        # 查找编译出的固件文件
+        find openwrt/bin/targets -name "*.bin" -exec cp {} firmware_output/ \; || true
+        ls -la firmware_output/
+    - name: Upload to GitHub
+      uses: actions/upload-artifact@v4
+      with:
+        name: n60pro-firmware
+        path: firmware_output/
