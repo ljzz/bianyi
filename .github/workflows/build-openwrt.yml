@@ -1,74 +1,14 @@
-name: Build N60 PRO Firmware
+name: Build N60 PRO
 on: workflow_dispatch
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Setup Environment
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential git wget python3
-    - name: Clone Source
-      run: |
-        git clone --depth=1 https://github.com/padavanonly/immortalwrt-mt798x-24.10 openwrt
-        cd openwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-    - name: Create Config
-      run: |
-        cd openwrt
-        # 选择目标设备 (N60 PRO)
-        echo "CONFIG_TARGET_MEDIATEK_FILOGIC_DEVICE_CMCC_N60_PRO=y" > .config
-        echo "CONFIG_TARGET_MEDIATEK_FILOGIC=y" >> .config
-        # 添加您要的软件包
-        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-istore=y" >> .config
-        # 移除不要的软件包
-        echo "CONFIG_PACKAGE_luci-app-adblock=n" >> .config
-        echo "CONFIG_PACKAGE_luci-app-docker=n" >> .config
-        # 应用配置
-        make defconfig
-    - name: Set Network Config
-      run: |
-        mkdir -p openwrt/files/etc/uci-defaults
-        # 使用Python创建配置文件，避免YAML heredoc
-        python3 << "PY_EOF"
-config_content = """#!/bin/sh
-uci set network.lan.ipaddr='192.168.6.1'
-uci set network.lan.netmask='255.255.255.0'
-uci set network.wan.proto='pppoe'
-uci set network.wan.username='15828860970'
-uci set network.wan.password='147258'
-uci set network.wan.ipv6='auto'
-uci set dhcp.lan.dhcpv6='server'
-uci set wireless.default_radio0.ssid='locust'
-uci set wireless.default_radio0.key='36925888'
-uci set wireless.default_radio0.encryption='psk2'
-uci set wireless.default_radio1.ssid='locust-5G'
-uci set wireless.default_radio1.key='36925888'
-uci set wireless.default_radio1.encryption='psk2'
-uci commit
-exit 0
-"""
-with open('openwrt/files/etc/uci-defaults/99-custom', 'w') as f:
-    f.write(config_content)
-PY_EOF
-        chmod +x openwrt/files/etc/uci-defaults/99-custom
-    - name: Build Firmware
-      run: |
-        cd openwrt
-        make download
-        make -j2
-    - name: Save Firmware
-      run: |
-        mkdir -p firmware_output
-        # 查找编译出的固件文件
-        find openwrt/bin/targets -name "*.bin" -exec cp {} firmware_output/ \; || true
-        ls -la firmware_output/
-    - name: Upload to GitHub
-      uses: actions/upload-artifact@v4
-      with:
-        name: n60pro-firmware
-        path: firmware_output/
+      - uses: actions/checkout@v4
+      - name: Run Build Script
+        run: bash .github/scripts/setup_firmware.sh
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: n60pro-firmware
+          path: firmware_output/
