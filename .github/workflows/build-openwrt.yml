@@ -16,7 +16,7 @@ jobs:
     - name: Configure
       run: |
         cd openwrt
-        wget https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-highpower.config -O .config
+        wget https://github.com/padavanonly/immortalwrt-mt798x-6.6/blob/2410/defconfig/nx60pro-ipailna-high-power.config -O .config
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-istore=y" >> .config
