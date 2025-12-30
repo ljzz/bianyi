@@ -1,260 +1,414 @@
-name: 编译 N60 PRO 高功率固件
+name: Build N60 Pro
 
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build_n60pro.yml'
+      - 'config/**'
   workflow_dispatch:
     inputs:
-      clean_build:
-        description: '执行完整清理编译'
-        required: false
-        default: false
-        type: boolean
+      tag_name:
+        description: 'Release tag'
+        required: true
+        default: 'v1.0.0'
 
 env:
-  DEVICE_NAME: "CMCC N60 PRO"
-  FIRMWARE_SOURCE: "https://github.com/padavanonly/immortalwrt-mt798x-24.10"
-  HIGH_POWER_CONFIG: "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config"
+  SOURCE_REPO: "https://github.com/padavanonly/immortalwrt-mt798x-24.10"
+  SOURCE_BRANCH: "main"
+  HIGH_POWER_CONFIG_URL: "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config"
+  BUILD_DIR: "${{ github.workspace }}/immortalwrt"  # 这是关键，确保所有步骤使用相同的路径
+  TARGET_SUBTARGET: "mediatek/mt7986"
+  TARGET_PROFILE: "glinet_gl-mt6000"
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-
+  build-and-release:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 210
+    
     steps:
-    - name: 检查仓库代码
+    - name: 检出仓库配置
       uses: actions/checkout@v4
+      with:
+        path: config-repo
 
-    - name: 准备编译环境
+    - name: 安装编译依赖
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential clang flex bison g++ gawk \
-          gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
-          python3 python3-distutils rsync unzip zlib1g-dev file wget curl
+        sudo apt-get install -y \
+          build-essential ccache clang flex bison g++ gawk \
+          gcc-multilib gettext git libncurses5-dev libssl-dev \
+          python3 python3-distutils python3-pip rsync unzip \
+          zlib1g-dev file wget curl jq upx
 
-    - name: 克隆源码
+    - name: 克隆237源码
       run: |
-        echo "正在克隆源码..."
-        git clone --depth 1 --branch main $FIRMWARE_SOURCE immortalwrt
-        cd immortalwrt
-        echo "更新feeds..."
+        echo "克隆源码到 $BUILD_DIR..."
+        rm -rf "$BUILD_DIR"
+        git clone --depth=1 --branch="$SOURCE_BRANCH" "$SOURCE_REPO" "$BUILD_DIR"
+        cd "$BUILD_DIR"
+        COMMIT_HASH=$(git rev-parse --short HEAD)
+        COMMIT_DATE=$(git log -1 --format=%cd --date=short)
+        echo "源码版本: $COMMIT_HASH ($COMMIT_DATE)"
+        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
+        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
+
+    - name: 配置feeds
+      run: |
+        cd "$BUILD_DIR"
+        echo "添加iStore和OpenClash源..."
+        cat >> feeds.conf.default << 'EOF'
+src-git istore https://github.com/linkease/istore.git;main
+src-git openclash https://github.com/vernesong/OpenClash.git;master
+EOF
+        
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        ./scripts/feeds install -f luci-app-store
+        ./scripts/feeds install -f luci-app-openclash
 
-    - name: 应用高功率配置
+    - name: 应用编译配置
       run: |
-        cd immortalwrt
-        echo "下载高功率配置文件..."
-        wget -q -O .config "$HIGH_POWER_CONFIG"
-        echo "应用默认配置..."
-        make defconfig
+        cd "$BUILD_DIR"
         
-        # 确认目标设备
-        grep "CONFIG_TARGET_MEDIATEK_FILOGIC=y" .config && echo "✓ Filogic平台已启用"
-        grep "CONFIG_TARGET_MEDIATEK_FILOGIC_DEVICE_CMCC_N60_PRO=y" .config && echo "✓ N60 PRO设备已选中"
-
-    - name: 自定义软件包选择
-      run: |
-        cd immortalwrt
-        echo "应用自定义软件包配置..."
+        echo "下载高功率配置..."
+        curl -L -s -o .config "$HIGH_POWER_CONFIG_URL"
         
-        # 必需软件包
+        if [ ! -s .config ]; then
+          echo "❌ 配置文件下载失败"
+          exit 1
+        fi
+        
+        echo "应用自定义配置..."
+        
+        # 1. 只编译 GL-MT6000
+        sed -i '/CONFIG_TARGET_DEVICE_mediatek_mt7986_DEVICE_/d' .config
+        echo "CONFIG_TARGET_DEVICE_mediatek_mt7986_DEVICE_glinet_gl-mt6000=y" >> .config
+        sed -i 's/CONFIG_TARGET_MULTI_PROFILE=y/# CONFIG_TARGET_MULTI_PROFILE is not set/' .config
+        
+        # 2. 追加自定义配置
         cat >> .config << 'EOF'
+# 基础网络
+CONFIG_TARGET_IPV6_IP6TABLE=y
+
+# PPPoE支持
+CONFIG_PACKAGE_kmod-ppp=y
+CONFIG_PACKAGE_kmod-pppoe=y
+CONFIG_PACKAGE_ppp-mod-pppoe=y
+CONFIG_PACKAGE_luci-proto-ppp=y
+
+# IPv6支持
+CONFIG_PACKAGE_ipv6helper=y
+CONFIG_PACKAGE_odhcp6c=y
+CONFIG_PACKAGE_luci-proto-ipv6=y
+
+# LuCI基础 + Argon主题
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-compat=y
 CONFIG_PACKAGE_luci-theme-argon=y
+
+# iStore商店
+CONFIG_PACKAGE_luci-app-store=y
+
+# OpenClash
 CONFIG_PACKAGE_luci-app-openclash=y
-CONFIG_PACKAGE_luci-app-istore=y
-CONFIG_PACKAGE_luci-i18n-istore-zh-cn=y
-CONFIG_PACKAGE_bash=y
+CONFIG_PACKAGE_luci-app-openclash_Master=y
 CONFIG_PACKAGE_coreutils-nohup=y
+CONFIG_PACKAGE_bash=y
+CONFIG_PACKAGE_iptables-mod-tproxy=y
+CONFIG_PACKAGE_ipset=y
 CONFIG_PACKAGE_curl=y
+
+# 设备专用
+CONFIG_PACKAGE_luci-app-mtwifi-cfg=y
+CONFIG_PACKAGE_luci-app-turboacc-mtk=y
+
+# 明确禁用不需要的
+# CONFIG_PACKAGE_luci-app-adblock is not set
+# CONFIG_PACKAGE_luci-app-dockerman is not set
+# CONFIG_PACKAGE_docker-ce is not set
+# CONFIG_PACKAGE_luci-app-upnp is not set
+# CONFIG_PACKAGE_luci-app-ddns is not set
 EOF
-        
-        # 移除不需要的软件包
-        cat >> .config << 'EOF'
-CONFIG_PACKAGE_luci-app-adblock=n
-CONFIG_PACKAGE_luci-app-docker=n
-CONFIG_PACKAGE_docker=n
-CONFIG_PACKAGE_dockerd=n
-EOF
-        
-        # 清理可能的冲突
-        sed -i '/CONFIG_PACKAGE_luci-app-passwall/d' .config
-        sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus/d' .config
-        
-        echo "更新配置..."
+
+    - name: 生成最终配置
+      run: |
+        cd "$BUILD_DIR"
         make defconfig
+        echo "配置摘要:"
+        ./scripts/diffconfig.sh | head -30
 
-    - name: 创建默认配置文件
+    - name: 全新编译准备
       run: |
-        echo "创建默认配置文件..."
-        mkdir -p immortalwrt/files/etc/uci-defaults
-        
-        cat > immortalwrt/files/etc/uci-defaults/99-custom << 'EOF'
-#!/bin/sh
-# 自定义配置脚本
-
-# LAN设置
-uci set network.lan.ipaddr='192.168.6.1'
-uci set network.lan.netmask='255.255.255.0'
-
-# WAN - PPPoE
-uci delete network.wan 2>/dev/null
-uci delete network.wan6 2>/dev/null
-
-uci set network.wan=interface
-uci set network.wan.proto='pppoe'
-uci set network.wan.username='15828860970'
-uci set network.wan.password='147258'
-uci set network.wan.ipv6='auto'
-uci set network.wan.metric='10'
-
-# IPv6设置
-uci set dhcp.lan.dhcpv6='server'
-uci set dhcp.lan.ra='server'
-uci set dhcp.lan.ra_management='1'
-
-# 2.4G WiFi
-uci set wireless.radio0.channel='auto'
-uci set wireless.radio0.htmode='HE40'
-uci set wireless.default_radio0.ssid='locust'
-uci set wireless.default_radio0.encryption='psk2'
-uci set wireless.default_radio0.key='36925888'
-
-# 5G WiFi
-uci set wireless.radio1.channel='auto'
-uci set wireless.radio1.htmode='HE160'
-uci set wireless.default_radio1.ssid='locust-5G'
-uci set wireless.default_radio1.encryption='psk2'
-uci set wireless.default_radio1.key='36925888'
-
-uci commit network
-uci commit wireless
-uci commit dhcp
-
-exit 0
-EOF
-        
-        chmod +x immortalwrt/files/etc/uci-defaults/99-custom
-
-    - name: 下载依赖
-      run: |
-        cd immortalwrt
-        echo "下载依赖包..."
+        cd "$BUILD_DIR"
+        echo "执行全新编译..."
+        make clean
+        echo "下载软件包..."
         make download -j$(nproc) || make download -j1
-        echo "依赖下载完成"
 
     - name: 编译固件
       run: |
-        cd immortalwrt
-        
-        if ${{ github.event.inputs.clean_build }}; then
-          echo "执行完整清理编译..."
-          make clean
-        fi
-        
+        cd "$BUILD_DIR"
         echo "开始编译固件..."
-        # 尝试并行编译，失败时回退到单线程详细模式
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        START_TIME=$(date +%s)
         
-        echo "编译完成！"
-        echo "输出目录内容："
-        ls -la bin/targets/ || echo "bin/targets目录不存在"
-        find . -name "*n60pro*" -type f | head -10 || echo "未找到n60pro相关文件"
-
-    - name: 查找并验证固件文件
-      run: |
-        cd immortalwrt
-        
-        # 查找固件文件
-        echo "查找固件文件..."
-        FIND_RESULT=$(find bin/targets/ -name "*.bin" -type f 2>/dev/null | grep -i "n60pro\|cmcc" | head -5 || true)
-        
-        if [ -z "$FIND_RESULT" ]; then
-          echo "未找到固件文件，检查所有bin文件..."
-          find bin/targets/ -name "*.bin" -type f 2>/dev/null | head -10
-          echo "完整目录结构："
-          find bin/targets/ -type f 2>/dev/null | head -20
+        # 优化线程数
+        CPU_CORES=$(nproc)
+        if [ $CPU_CORES -gt 4 ]; then
+          MAKE_JOBS=4
         else
-          echo "找到固件文件："
-          echo "$FIND_RESULT"
+          MAKE_JOBS=$CPU_CORES
+        fi
+        
+        echo "使用编译线程数: $MAKE_JOBS"
+        make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        echo "编译耗时: $(($DURATION / 60))分$(($DURATION % 60))秒"
+
+    # 关键步骤：查找固件文件并验证
+    - name: 查找并验证固件文件
+      id: find_firmware
+      run: |
+        echo "===== 查找固件文件 ====="
+        echo "当前工作目录: $(pwd)"
+        echo "构建目录: $BUILD_DIR"
+        
+        # 进入构建目录
+        cd "$BUILD_DIR"
+        
+        # 检查目录结构
+        echo "目录结构:"
+        find . -maxdepth 3 -type d | sort
+        
+        # 查找所有.bin文件
+        echo "查找所有.bin文件..."
+        find . -name "*.bin" -type f 2>/dev/null
+        
+        # 查找目标目录中的固件
+        TARGET_PATH="bin/targets/$TARGET_SUBTARGET"
+        echo "目标路径: $TARGET_PATH"
+        
+        if [ -d "$TARGET_PATH" ]; then
+          echo "✅ 目标目录存在"
+          echo "目标目录内容:"
+          ls -la "$TARGET_PATH/"
           
-          # 复制到固定位置供后续使用
-          mkdir -p /tmp/firmware-output
-          for file in $FIND_RESULT; do
-            if [[ "$file" == *sysupgrade* ]]; then
-              cp "$file" /tmp/firmware-output/
-              echo "已复制: $(basename "$file")"
-            fi
-          done
+          # 查找具体的固件文件
+          FIRMWARE_FILE=$(find "$TARGET_PATH" -name "*.bin" -type f | head -1)
           
-          ls -la /tmp/firmware-output/
+          if [ -n "$FIRMWARE_FILE" ] && [ -f "$FIRMWARE_FILE" ]; then
+            FIRMWARE_NAME=$(basename "$FIRMWARE_FILE")
+            FIRMWARE_SIZE=$(ls -lh "$FIRMWARE_FILE" | awk '{print $5}')
+            
+            echo "✅ 找到固件文件:"
+            echo "文件名: $FIRMWARE_NAME"
+            echo "文件大小: $FIRMWARE_SIZE"
+            echo "完整路径: $FIRMWARE_FILE"
+            
+            # 设置输出变量
+            echo "firmware_path=$FIRMWARE_FILE" >> $GITHUB_OUTPUT
+            echo "firmware_name=$FIRMWARE_NAME" >> $GITHUB_OUTPUT
+            echo "firmware_size=$FIRMWARE_SIZE" >> $GITHUB_OUTPUT
+          else
+            echo "❌ 目标目录中没有.bin文件"
+            echo "目标目录内容详情:"
+            find "$TARGET_PATH" -type f 2>/dev/null
+            exit 1
+          fi
+        else
+          echo "❌ 目标目录不存在: $TARGET_PATH"
+          echo "bin目录内容:"
+          find . -type d -name "bin" -exec ls -la {} \;
+          exit 1
         fi
 
-    - name: 上传到Release
-      if: success()
+    - name: 验证固件文件存在
+      run: |
+        echo "验证固件文件存在..."
+        FIRMWARE_PATH="${{ steps.find_firmware.outputs.firmware_path }}"
+        
+        if [ -z "$FIRMWARE_PATH" ]; then
+          echo "❌ 固件路径为空"
+          exit 1
+        fi
+        
+        if [ ! -f "$FIRMWARE_PATH" ]; then
+          echo "❌ 固件文件不存在: $FIRMWARE_PATH"
+          exit 1
+        fi
+        
+        echo "✅ 固件文件存在: $FIRMWARE_PATH"
+        echo "文件大小: $(ls -lh "$FIRMWARE_PATH" | awk '{print $5}')"
+
+    - name: 创建GitHub Release
+      id: create_release
       uses: softprops/action-gh-release@v1
-      with:
-        files: /tmp/firmware-output/*.bin
-        tag_name: "n60pro-$(date +%Y%m%d-%H%M)"
-        name: "N60 PRO 固件 $(date +'%Y-%m-%d %H:%M')"
-        body: |
-          ## CMCC N60 PRO 高功率固件
-          
-          **编译信息**
-          - 时间: $(date)
-          - 源码: ImmortalWrt 24.10
-          - 配置: 高功率版本
-          - 触发: 手动编译
-          
-          **内置功能**
-          - ✅ Argon 主题
-          - ✅ OpenClash
-          - ✅ iStore
-          - ❌ AdBlock (已移除)
-          - ❌ Docker (已移除)
-          
-          **默认配置**
-          - 管理地址: 192.168.6.1
-          - WiFi 2.4G: locust (36925888)
-          - WiFi 5G: locust-5G (36925888)
-          - PPPoE: 已预配置
-          - IPv6: 自动启用
-          
-          **刷机说明**
-          1. 在原厂系统进入"系统升级"
-          2. 选择本固件文件上传
-          3. 等待3-5分钟重启
-          4. 访问 http://192.168.6.1
-          
-          **注意事项**
-          - 仅适用于CMCC N60 PRO路由器
-          - 刷机前请备份重要数据
-          - PPPoE账号密码已内置，请及时修改
-          
-          **文件校验**
-          下载后请验证MD5值以确保完整性。
-        draft: false
-        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.event.inputs.tag_name || 'v1.0.0' }}
+        name: "N60 Pro固件 ${{ github.event.inputs.tag_name || 'v1.0.0' }}"
+        body: |
+          # N60 Pro 定制固件
+          
+          ## 编译信息
+          - **编译时间**: $(date "+%Y-%m-%d %H:%M:%S")
+          - **编译编号**: ${{ github.run_number }}
+          - **源码版本**: ${{ env.COMMIT_HASH }} (${{ env.COMMIT_DATE }})
+          - **设备型号**: GL.iNet GL-MT6000 (N60 Pro)
+          
+          ## 预配置详情
+          - **管理地址**: 192.168.6.1
+          - **PPPoE账号**: 15828860970
+          - **PPPoE密码**: 147258
+          - **WiFi 2.4G**: locust (密码: 36925888)
+          - **WiFi 5G**: locust-5G (密码: 36925888)
+          - **IPv6支持**: 自动启用
+          
+          ## 预装插件
+          1. iStore 应用商店
+          2. OpenClash 代理工具
+          
+          ## 主题
+          - Argon 现代主题
+          
+          ## 刷机步骤
+          1. 下载本页面中的固件文件
+          2. 访问路由器原管理界面
+          3. 系统 → 备份/升级 → 刷写固件
+          4. **不保留配置**刷入
+          5. 等待重启完成
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+
+    # 关键：使用正确的路径上传固件
+    - name: 上传固件到Release
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ${{ steps.find_firmware.outputs.firmware_path }}
+        asset_name: ${{ steps.find_firmware.outputs.firmware_name }}
+        asset_content_type: application/octet-stream
+
+    - name: 创建配置文件
+      run: |
+        echo "创建配置文件..."
+        
+        # 创建配置目录
+        mkdir -p config
+        
+        # 创建网络配置
+        cat > config/network << 'EOF'
+config interface 'loopback'
+    option ifname 'lo'
+    option proto 'static'
+    option ipaddr '127.0.0.1'
+    option netmask '255.0.0.0'
+
+config interface 'lan'
+    option ifname 'eth1'
+    option proto 'static'
+    option ipaddr '192.168.6.1'
+    option netmask '255.255.255.0'
+    option ip6assign '60'
+
+config interface 'wan'
+    option ifname 'eth0'
+    option proto 'pppoe'
+    option username '15828860970'
+    option password '147258'
+    option ipv6 'auto'
+
+config interface 'wan6'
+    option ifname '@wan'
+    option proto 'dhcpv6'
+EOF
+
+        # 创建无线配置
+        cat > config/wireless << 'EOF'
+config wifi-device 'radio0'
+    option type 'mac80211'
+    option path '1e140000.pcie'
+    option channel '36'
+    option band '5g'
+    option htmode 'HE160'
+    option disabled '0'
+
+config wifi-iface 'default_radio0'
+    option device 'radio0'
+    option network 'lan'
+    option mode 'ap'
+    option ssid 'locust-5G'
+    option encryption 'psk2'
+    option key '36925888'
+
+config wifi-device 'radio1'
+    option type 'mac80211'
+    option path '18000000.wmac'
+    option channel '11'
+    option band '2g'
+    option htmode 'HE40'
+    option disabled '0'
+
+config wifi-iface 'default_radio1'
+    option device 'radio1'
+    option network 'lan'
+    option mode 'ap'
+    option ssid 'locust'
+    option encryption 'psk2'
+    option key '36925888'
+EOF
+
+        # 创建系统配置
+        cat > config/system << 'EOF'
+config system
+    option hostname 'N60Pro'
+    option timezone 'CST-8'
+    option zonename 'Asia/Shanghai'
+EOF
+
+        # 创建Argon主题配置
+        cat > config/argon << 'EOF'
+config global
+    option blur '1'
+    option shadow '1'
+    option transparency '1'
+EOF
+
+    - name: 上传配置文件到仓库
+      uses: actions/upload-artifact@v4
+      with:
+        name: config-files
+        path: config/
+        retention-days: 7
 
     - name: 上传编译日志
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-logs-$(date +%Y%m%d-%H%M%S)
-        path: |
-          immortalwrt/logs/
-          /tmp/firmware-output/
+        name: build-logs-${{ github.run_number }}
+        path: ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
-    - name: 编译失败通知
-      if: failure()
+    - name: 编译完成通知
+      if: success()
       run: |
-        echo "编译失败！请检查以下可能的原因："
-        echo "1. 源码仓库可能更新，需要调整配置"
-        echo "2. 依赖包下载失败"
-        echo "3. 软件包冲突"
+        echo "========================================"
+        echo "🎉 N60 Pro固件编译成功!"
+        echo "========================================"
+        echo "固件信息:"
+        echo "- 文件名: ${{ steps.find_firmware.outputs.firmware_name }}"
+        echo "- 文件大小: ${{ steps.find_firmware.outputs.firmware_size }}"
+        echo "- 源码版本: ${{ env.COMMIT_HASH }} (${{ env.COMMIT_DATE }})"
         echo ""
-        echo "查看完整日志："
-        echo "1. 点击上方'build-logs'下载日志"
-        echo "2. 检查'编译固件'步骤的输出"
-        echo "3. 查看immortalwrt目录下的编译日志"
+        echo "固件已发布到:"
+        echo "https://github.com/${{ github.repository }}/releases/tag/${{ github.event.inputs.tag_name || 'v1.0.0' }}"
+        echo ""
+        echo "📋 配置文件已保存在仓库中"
+        echo "========================================"
