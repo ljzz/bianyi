@@ -21,7 +21,7 @@ jobs:
           openwrt-repo: https://github.com/padavanonly/immortalwrt-mt798x-24.10
           openwrt-branch: openwrt-24.10-6.6
           # 你的高功率配置文件（需要先上传到你的仓库）
-          config-file: .github/config/nx60pro-high-power.config
+          config-file: config/nx60pro-high-power.config
           # 自定义你的软件包列表
           packages: |
             luci-app-openclash
