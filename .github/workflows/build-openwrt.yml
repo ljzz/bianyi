@@ -1,4 +1,4 @@
-name: build-openwrt
+name: 编译 OpenWrt 固件
 
 on:
   workflow_dispatch:
@@ -13,12 +13,8 @@ on:
           - openwrt-24.10
 
 env:
-  # 使用237源码
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
-  # 高功率配置文件
   HIGH_POWER_CONFIG: https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
-  
-  # 固件设置
   FIRMWARE_TAG: 237-high-power
   TZ: Asia/Shanghai
 
@@ -34,14 +30,12 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # 清理系统缓存
         sudo rm -rf /etc/apt/sources.list.d/* \
           /usr/share/dotnet \
           /usr/local/lib/android \
           /opt/ghc \
           /opt/hostedtoolcache/CodeQL
         
-        # 安装编译依赖
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install \
           build-essential \
@@ -93,18 +87,16 @@ jobs:
     - name: 设置软件源
       working-directory: openwrt
       run: |
-        # 创建 feeds.conf.default
         cat > feeds.conf.default << 'EOF'
-        src-git-full packages https://git.openwrt.org/feed/packages.git;openwrt-24.10
-        src-git-full luci https://git.openwrt.org/project/luci.git;openwrt-24.10
-        src-git-full routing https://git.openwrt.org/feed/routing.git;openwrt-24.10
-        src-git-full telephony https://git.openwrt.org/feed/telephony.git;openwrt-24.10
-        src-git istore https://github.com/linkease/istore;main
-        src-git openclash https://github.com/vernesong/OpenClash.git;master
-        src-git argon https://github.com/jerrykuku/luci-theme-argon.git;master
-        EOF
+src-git-full packages https://git.openwrt.org/feed/packages.git;openwrt-24.10
+src-git-full luci https://git.openwrt.org/project/luci.git;openwrt-24.10
+src-git-full routing https://git.openwrt.org/feed/routing.git;openwrt-24.10
+src-git-full telephony https://git.openwrt.org/feed/telephony.git;openwrt-24.10
+src-git istore https://github.com/linkease/istore;main
+src-git openclash https://github.com/vernesong/OpenClash.git;master
+src-git argon https://github.com/jerrykuku/luci-theme-argon.git;master
+EOF
         
-        # 更新并安装 feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         echo "软件源设置完成"
@@ -112,44 +104,33 @@ jobs:
     - name: 配置编译选项
       working-directory: openwrt
       run: |
-        # 更新配置
         make defconfig
         
-        # 启用 Argon 主题
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-argon-config=y" >> .config
-        
-        # 启用 OpenClash
         echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-        
-        # 启用 iStore
         echo "CONFIG_PACKAGE_luci-app-store=y" >> .config
         
-        # 禁用不需要的软件包
         echo "# CONFIG_PACKAGE_luci-app-adblock is not set" >> .config
         echo "# CONFIG_PACKAGE_adblock is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-docker is not set" >> .config
         echo "# CONFIG_PACKAGE_docker is not set" >> .config
         echo "# CONFIG_PACKAGE_dockerd is not set" >> .config
         
-        # 启用 IPv6
         echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
         echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
         echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_ipv6=y" >> .config
         
-        # 生成最终配置
         make defconfig
         echo "编译选项配置完成"
     
     - name: 创建自定义配置文件
       working-directory: openwrt
       run: |
-        # 创建 files 目录
         mkdir -p files/etc/config
         mkdir -p files/etc/uci-defaults
         
-        # 1. 创建网络配置文件 (包含PPPoE设置)
         cat > files/etc/config/network << 'EOF'
 config interface 'loopback'
     option device 'lo'
@@ -191,7 +172,6 @@ config interface 'wan6'
     option reqprefix 'auto'
 EOF
         
-        # 2. 创建无线配置文件
         cat > files/etc/config/wireless << 'EOF'
 config wifi-device 'radio0'
     option type 'mac80211'
@@ -232,7 +212,6 @@ config wifi-iface 'default_radio1'
     option wpa_disable_eapol_key_retries '1'
 EOF
         
-        # 3. 创建系统配置文件
         cat > files/etc/config/system << 'EOF'
 config system
     option hostname 'locust-router'
@@ -260,7 +239,6 @@ config led 'led_wan'
     option mode 'link tx rx'
 EOF
         
-        # 4. 创建 DHCP 配置文件
         cat > files/etc/config/dhcp << 'EOF'
 config dnsmasq
     option domainneeded '1'
@@ -306,37 +284,30 @@ config odhcpd 'odhcpd'
     option loglevel '4'
 EOF
         
-        # 5. 创建启动脚本以应用配置
         cat > files/etc/uci-defaults/99-custom-config << 'EOF'
 #!/bin/sh
 
-# 设置主题为argon
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
 
-# 启用IPv6
 uci set network.wan.ipv6='auto'
 uci set network.wan6.proto='dhcpv6'
 uci set network.wan6.reqaddress='try'
 uci set network.wan6.reqprefix='auto'
 uci commit network
 
-# 设置防火墙规则允许IPv6
 uci set firewall.@defaults[0].drop_invalid='0'
 uci commit firewall
 
-# 重启服务
 /etc/init.d/network restart
 /etc/init.d/firewall restart
 
-# 删除自身，只运行一次
 rm -f /etc/uci-defaults/99-custom-config
 
 exit 0
 EOF
         
         chmod +x files/etc/uci-defaults/99-custom-config
-        
         echo "自定义配置文件创建完成"
     
     - name: 下载软件包
@@ -344,11 +315,8 @@ EOF
       run: |
         echo "开始下载软件包..."
         make download -j$(nproc)
-        
-        # 清理无效的小文件
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
-        
         echo "软件包下载完成"
     
     - name: 开始编译固件
@@ -356,31 +324,16 @@ EOF
       timeout-minutes: 180
       run: |
         echo "开始编译固件，使用 $(nproc) 个线程..."
-        
-        # 编译固件
         make -j$(nproc) || make -j1 || make -j1 V=s
         
-        # 检查编译结果
         if find bin/targets -name "*.bin" -o -name "*.img" | grep -q .; then
           echo "status=success" >> $GITHUB_OUTPUT
           
-          - name: 诊断文件结构
-  if: success()
-  working-directory: openwrt
-  run: |
-    echo "完整的目录结构:"
-    find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.gz" | head -20
-    echo "bin目录结构:"
-    find bin -type d | head -30
-    
-          # 获取设备名称
           DEVICE_NAME=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' || echo "unknown")
           echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-          
           echo "FILE_DATE=$(date +"%Y%m%d-%H%M")" >> $GITHUB_ENV
           echo "BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
           
-          # 找到第一个固件文件来确定目录
           FIRST_FIRMWARE=$(find bin/targets -name "*.bin" -o -name "*.img" | head -1)
           if [ -n "$FIRST_FIRMWARE" ]; then
             FIRMWARE_DIR=$(dirname "$FIRST_FIRMWARE")
@@ -401,21 +354,15 @@ EOF
       working-directory: openwrt
       run: |
         echo "整理固件文件..."
-        
-        # 进入固件目录
         cd ${{ env.FIRMWARE_DIR }}
-        
-        # 显示当前目录和文件
         echo "当前目录: $(pwd)"
         echo "目录内容:"
         ls -la
         
-        # 删除不必要的文件
         rm -rf packages
         rm -rf *.buildinfo *.manifest
         
-        # 创建固件说明文件
-        cat > README.md << EOF
+        cat > README.md << 'EOF'
 # OpenWrt 固件说明
 
 ## 固件信息
@@ -447,12 +394,11 @@ EOF
 ## 注意事项
 1. 首次登录请修改默认密码
 2. 建议修改PPPoE密码确保安全
-3. 如需重置配置，可执行 \`firstboot\` 命令
+3. 如需重置配置，可执行 `firstboot` 命令
 
 ## 文件列表
 EOF
         
-        # 添加文件列表
         echo '```' >> README.md
         find . -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) | sort >> README.md
         echo '```' >> README.md
