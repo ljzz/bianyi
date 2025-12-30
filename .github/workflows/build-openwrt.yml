@@ -135,7 +135,6 @@ EOF
         make -j$(nproc) || make -j1 V=s
         
         echo "编译完成！查找固件..."
-        find . -name "*.bin" -type f | grep -i "n60pro\|cmcc" | head -10
 
     - name: 准备固件文件
       id: prepare-firmware
@@ -172,9 +171,9 @@ EOF
         sha256sum "$FIRMWARE_NAME" > "$FIRMWARE_NAME.sha256"
         
         # 创建固件信息文件
-        cat > firmware-info.txt << EOF
+        cat > firmware-info.txt << 'EOF'
 设备型号：CMCC N60 PRO
-固件名称：$FIRMWARE_NAME
+固件名称：$(echo $FIRMWARE_NAME)
 编译时间：$(date)
 源码版本：ImmortalWrt 24.10
 配置类型：高功率版本
@@ -290,7 +289,7 @@ EOF
         echo "🎉 编译完成！"
         echo ""
         echo "固件下载地址："
-        echo "https://github.com/ljzz/bianyi/raw/main/firmware/${{ steps.prepare-firmware.outputs.firmware_name }}"
+        echo "https://github.com/ljzz/bianyi/raw/main/firmware/immortalwrt-n60pro-highpower-$(date +%Y%m%d-%H%M).bin"
         echo ""
         echo "查看所有文件："
         echo "https://github.com/ljzz/bianyi/tree/main/firmware"
