@@ -370,6 +370,10 @@ EOF
           
           echo "FILE_DATE=$(date +"%Y%m%d-%H%M")" >> $GITHUB_ENV
           echo "BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+          
+          # 获取固件目录
+          cd bin/targets/*/*
+          echo "FIRMWARE_DIR=$PWD" >> $GITHUB_ENV
         else
           echo "status=failure" >> $GITHUB_OUTPUT
           echo "编译失败，请检查日志"
@@ -378,10 +382,9 @@ EOF
     
     - name: 整理固件文件
       if: success()
-      working-directory: openwrt
+      working-directory: ${{ env.FIRMWARE_DIR }}
       run: |
         echo "整理固件文件..."
-        cd bin/targets/*/*
         
         # 删除不必要的文件
         rm -rf packages
@@ -392,10 +395,10 @@ EOF
 # OpenWrt 固件说明
 
 ## 固件信息
-- 编译时间: $BUILD_DATE
+- 编译时间: ${{ env.BUILD_DATE }}
 - 源码版本: immortalwrt-mt798x-24.10
 - 编译分支: ${{ github.event.inputs.branch }}
-- 设备型号: $DEVICE_NAME
+- 设备型号: ${{ env.DEVICE_NAME }}
 - 配置类型: 高功率版本
 
 ## 包含功能
@@ -430,16 +433,7 @@ EOF
         find . -type f -name "*.bin" -o -name "*.img" | sort >> README.md
         echo '```' >> README.md
         
-        echo "FIRMWARE_DIR=$PWD" >> $GITHUB_ENV
         echo "固件整理完成"
-    
-    - name: 上传固件到 Artifacts
-      if: success()
-      uses: actions/upload-artifact@v4
-      with:
-        name: OpenWrt-Firmware-${{ env.DEVICE_NAME }}-${{ github.event.inputs.branch }}
-        path: ${{ env.FIRMWARE_DIR }}
-        retention-days: 7
     
     - name: 创建版本发布到你的GitHub仓库
       if: success()
@@ -481,9 +475,17 @@ EOF
           - 请勿泄露 PPPoE 账号密码
           - 建议首次使用后修改密码
           - 此固件仅适用于特定硬件
+          
+          **文件列表**:
+          ```
+          $(find ${{ env.FIRMWARE_DIR }} -type f -name "*.bin" -o -name "*.img" | xargs -I {} basename {} | sort)
+          ```
         draft: false
         prerelease: false
-        files: ${{ env.FIRMWARE_DIR }}/*
+        files: |
+          ${{ env.FIRMWARE_DIR }}/*.bin
+          ${{ env.FIRMWARE_DIR }}/*.img
+          ${{ env.FIRMWARE_DIR }}/README.md
     
     - name: 清理旧的发布版本
       if: success()
