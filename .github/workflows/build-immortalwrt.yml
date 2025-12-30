@@ -1,35 +1,38 @@
+#
+# https://github.com/P3TERX/Actions-OpenWrt
+#
+# 文件：.github/workflows/openwrt-bulder.yml
+# 描述：使用 GitHub Actions 构建 OpenWrt
+#
+# 版权所有 (c) 2019-2024 P3TERX <https://p3terx.com>
+#
+# 这是自由软件，遵循 MIT 许可证。
+# 更多信息请参阅 /LICENSE
+#
+
+# 工作流名称
 name: Build 237 High Power ImmortalWrt
 
+# 触发条件：通过 repository_dispatch 事件或手动触发
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/build-immortalwrt.yml'
-      - 'config/**'
-      - 'files/**'
-      - 'scripts/**'
+  repository_dispatch:
   workflow_dispatch:
-    inputs:
-      clean_build:
-        description: 'Clean build (remove caches)'
-        required: false
-        default: 'false'
-        type: boolean
 
 env:
   # 基础配置
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
-  REPO_BRANCH: 2410
-  HIGH_POWER_CONFIG_URL: https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
-  
+  REPO_BRANCH: openwrt-24.10-6.6
+    FEEDS_CONF: feeds.conf.default
+  HIGH_POWER_CONFIG_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6/blob/2410/defconfig/nx60pro-ipailna-high-power.config
   # 设备配置
   DEVICE_PROFILE: mediatek_filogic
   DEVICE_NAME: nix30_snand
   
   # 功能配置
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
-  KEEP_LATEST_RELEASES: 5
+  UPLOAD_FIRMWARE: true                                           # 是否上传固件
+  UPLOAD_RELEASE: true                                            # 是否发布Release
+  FIRMWARE_TAG: padavanonly-237-mt798x-6.6                        # 固件版本标签
+  TZ: Asia/Shanghai                                               # 时区设置
   
   # 网络配置
   LAN_IP: 192.168.6.1
@@ -46,40 +49,74 @@ jobs:
       image: p3terx/openwrt-builder:latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        path: builder
+    # 1. 拉取当前仓库代码（主要是脚本和配置文件）
+    - name: Checkout
+      uses: actions/checkout@main
 
-    - name: Initialize build environment
+    # 2. 初始化构建环境，安装必要的依赖包
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
-          gettext git java-propose-classpath libelf-dev libncurses5-dev \
-          libncursesw5-dev libssl-dev python3 python2.7-dev python3-pip \
-          python3-setuptools python3-dev rsync unzip wget xsltproc zlib1g-dev \
-          subversion mercurial
+        # 清理系统，移除不必要的软件和缓存
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        # 更新包列表并安装编译所需的大量工具和库（如编译器、库文件、开发工具等）
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+        # 清理无用的包和缓存
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        # 设置时区
+        sudo timedatectl set-timezone "$TZ"
+        # 创建工作目录并设置权限
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
 
+    # 3. 克隆 OpenWrt 源码仓库到 /workdir 目录
     - name: Clone source code
+      working-directory: /workdir
       run: |
-        git clone --depth 1 --branch $REPO_BRANCH $REPO_URL openwrt
+        df -hT $PWD  # 显示磁盘使用情况
+        git clone -b $REPO_BRANCH --single-branch --filter=blob:none $REPO_URL openwrt
+        # 创建软链接到 GitHub 工作区，方便后续步骤访问
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    # 4. 加载自定义软件源配置并运行第一个自定义脚本
+    - name: Load custom feeds
+      run: |
+        # 如果存在自定义的 feeds 配置文件，则替换默认的
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        # 给自定义脚本1添加执行权限并运行
+        chmod +x $DIY_P1_SH
         cd openwrt
-        echo "Src: $(pwd)"
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+
+ # 5. 更新软件源（feeds）
+    - name: Update feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+# 6. 安装所有可用的软件包
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a   
 
     - name: Download high power configuration
       run: |
         cd openwrt
-        wget $HIGH_POWER_CONFIG_URL -O .config
+        wget $HIGH_POWER_CONFIG_URL -O .config      
 
-    - name: Update feeds
+    # 7. 加载自定义配置（文件系统和编译配置）并运行第二个自定义脚本
+    - name: Load custom configuration
       run: |
+        # 如果存在自定义文件系统目录，则移到 openwrt 目录下
+        [ -e files ] && mv files openwrt/files
+        # 如果存在自定义配置文件，则设为 openwrt 的 .config
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        # 给自定义脚本2添加执行权限并运行
+        chmod +x $DIY_P2_SH
         cd openwrt
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        $GITHUB_WORKSPACE/$DIY_P2_SH      
 
-    - name: Apply custom configurations
-      run: |
-        cd openwrt
         
         # 1. 安装 Argon 主题
         ./scripts/feeds install luci-theme-argon
@@ -398,88 +435,99 @@ EOF
         # 下载所有依赖包
         make download -j$(nproc) || make download -j1 || make download -j1 V=s
 
-    - name: Build firmware
-      timeout-minutes: 120
+ # 8. 下载编译所需的软件包
+    - name: Download package
+      id: package
       run: |
         cd openwrt
-        
-        # 清除之前的编译结果（如果需要）
-        if [ "${{ inputs.clean_build || 'false' }}" = "true" ]; then
-          make clean
-        fi
-        
-        # 开始编译，使用所有CPU核心
-        echo "Starting compilation with $(nproc) threads"
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        
-        # 检查编译结果
-        if [ -f bin/targets/*/*/*.bin ]; then
-          echo "Build successful!"
-          ls -la bin/targets/*/*/*.bin
-        else
-          echo "Build failed!"
-          exit 1
-        fi
+        make defconfig           # 生成默认配置
+        make download -j8        # 并行下载包（8线程）
+        # 查找并显示小于1KB的文件（可能是下载失败的），然后删除它们
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
 
-    - name: Prepare artifacts
-      if: success()
+    # 9. 开始编译固件
+    - name: Compile the firmware
+      id: compile
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread compile"  # 显示可用的CPU核心数
+        # 尝试编译：先多线程，失败则单线程，再失败则单线程并显示详细输出
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT  # 标记编译成功
+        # 从.config文件中提取设备名称，并设置为环境变量
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        # 生成基于当前时间的文件日期标记
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    # 10. 检查磁盘空间使用情况（如果任务未被取消）
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
+
+    # 11. 上传整个bin目录作为构建产物（可选，由UPLOAD_BIN_DIR控制）
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}  # 产物名称包含设备名和日期
+        path: openwrt/bin  # 上传的目录路径
+
+    # 12. 整理固件文件（删除packages目录，为上传固件做准备）
+    - name: Organize files
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
-        
-        # 创建固件信息文件
-        FIRMWARE_FILE=$(ls -1 *.bin | head -1)
-        echo "固件信息:" > firmware-info.txt
-        echo "编译时间: $(date '+%Y-%m-%d %H:%M:%S')" >> firmware-info.txt
-        echo "固件文件: $FIRMWARE_FILE" >> firmware-info.txt
-        echo "设备型号: ${{ env.DEVICE_NAME }}" >> firmware-info.txt
-        echo "内核版本: 6.6" >> firmware-info.txt
-        echo "" >> firmware-info.txt
-        echo "内置功能:" >> firmware-info.txt
-        echo "- Argon 主题" >> firmware-info.txt
-        echo "- OpenClash 插件" >> firmware-info.txt
-        echo "- iStore 应用商店" >> firmware-info.txt
-        echo "- IPv6 支持" >> firmware-info.txt
-        echo "" >> firmware-info.txt
-        echo "网络配置:" >> firmware-info.txt
-        echo "管理地址: ${{ env.LAN_IP }}" >> firmware-info.txt
-        echo "2.4G WiFi: ${{ env.WIFI_SSID }}" >> firmware-info.txt
-        echo "5G WiFi: ${{ env.WIFI_SSID_5G }}" >> firmware-info.txt
-        echo "WiFi密码: ${{ env.WIFI_PASSWORD }}" >> firmware-info.txt
-        echo "PPPoE账号: ${{ env.PPPOE_USERNAME }}" >> firmware-info.txt
-        
-        # 设置输出变量
-        echo "FIRMWARE_PATH=$(pwd)" >> $GITHUB_ENV
-        echo "FIRMWARE_FILE=$FIRMWARE_FILE" >> $GITHUB_ENV
+        rm -rf packages  # 删除软件包目录，只保留固件文件
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV  # 设置固件目录路径为环境变量
+        echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Upload firmware as artifact
-      if: success()
-      uses: actions/upload-artifact@v4
+    # 13. 上传固件目录作为构建产物
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: immortalwrt-firmware-${{ env.DEVICE_NAME }}
-        path: |
-          ${{ env.FIRMWARE_PATH }}/*.bin
-          ${{ env.FIRMWARE_PATH }}/firmware-info.txt
-        retention-days: 7
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
 
-    - name: Create GitHub Release
-      if: success() && env.UPLOAD_RELEASE == 'true'
-      uses: softprops/action-gh-release@v1
+    # 14. 生成 Release 的标签名和说明文件
+    - name: Generate release tag
+      id: tag
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      run: |
+        # 生成基于日期和固件标签的发布标签
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")-${{ env.FIRMWARE_TAG }}" >> $GITHUB_OUTPUT
+        # 创建 release.txt 文件（此处有语法错误，UPLOAD_GOFILE 变量未定义且 steps.gofile 不存在）
+        touch release.txt
+        [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    # 15. 上传固件到 GitHub Release
+    - name: Upload firmware to release
+      uses: softprops/action-gh-release@master
+      if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 使用 GitHub Token 进行认证
       with:
-        tag_name: firmware-${{ env.DEVICE_NAME }}-$(date +'%Y%m%d-%H%M')
-        name: "ImmortalWrt 高功率固件 $(date +'%Y-%m-%d %H:%M')"
-        body_path: ${{ env.FIRMWARE_PATH }}/firmware-info.txt
-        files: |
-          ${{ env.FIRMWARE_PATH }}/*.bin
-        draft: false
-        prerelease: false
+        tag_name: ${{ steps.tag.outputs.release_tag }}  # 发布标签
+        body_path: release.txt                         # 发布说明文件
+        files: ${{ env.FIRMWARE }}/*                   # 要发布的固件文件
 
-    - name: Clean up old releases
-      if: success() && env.UPLOAD_RELEASE == 'true'
-      uses: dev-drprasad/delete-older-releases@v0.2.0
+    # 16. 删除旧的 workflow 运行记录，只保留最近2次
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@main
       with:
-        keep_latest: ${{ env.KEEP_LATEST_RELEASES }}
-        delete_tag_pattern: firmware-${{ env.DEVICE_NAME }}-*
+        retain_days: 0          # 不保留任何过去的天数
+        keep_minimum_runs: 2    # 至少保留最近2次运行
+
+    # 17. 删除旧的 Releases，只保留最新的6个
+    - name: Remove old Releases
+      uses: dev-drprasad/delete-older-releases@master
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 6          # 保留最新的6个发布
+        delete_tags: true       # 同时删除关联的标签
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
