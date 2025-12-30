@@ -19,28 +19,18 @@ jobs:
     - name: Set up build environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison \
-          build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar \
-          flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man \
-          intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
-          libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
-          libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip \
-          p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils \
-          python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig \
-          texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+        sudo apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
 
     - name: Clone ImmortalWrt source
       run: |
-        git clone -b openwrt-24.10-6.6 --single-branch --filter=blob:none \
-          https://github.com/padavanonly/immortalwrt-mt798x-24.10 immortalwrt-mt798x
+        git clone -b openwrt-24.10-6.6 --single-branch --filter=blob:none https://github.com/padavanonly/immortalwrt-mt798x-24.10 immortalwrt-mt798x
         cd immortalwrt-mt798x
         echo "源码克隆完成"
 
     - name: Download high-power config
       run: |
         cd immortalwrt-mt798x
-        wget -O nx60pro-high-power.config \
-          https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
+        wget -O nx60pro-high-power.config https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
 
     - name: Setup feeds and config
       run: |
@@ -62,15 +52,21 @@ jobs:
         echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
         echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
 
-    - name: Create custom configuration files
+    - name: Create config script
       run: |
         cd immortalwrt-mt798x
-        mkdir -p files/etc/config
-        mkdir -p files/etc/uci-defaults
         
-        # 网络配置
-        cat > files/etc/config/network << 'END_NETWORK'
-config interface 'loopback'
+        # 创建一个Python脚本来生成配置文件
+        cat > create_configs.py << "PYEOF"
+import os
+
+# 创建目录
+os.makedirs("files/etc/config", exist_ok=True)
+os.makedirs("files/etc/uci-defaults", exist_ok=True)
+
+# 网络配置
+with open("files/etc/config/network", "w") as f:
+    f.write("""config interface 'loopback'
     option device 'lo'
     option proto 'static'
     option ipaddr '127.0.0.1'
@@ -97,11 +93,11 @@ config interface 'wan'
     option username '15828860970'
     option password '147258'
     option ipv6 'auto'
-END_NETWORK
-        
-        # 无线配置
-        cat > files/etc/config/wireless << 'END_WIRELESS'
-config wifi-device 'radio0'
+""")
+
+# 无线配置
+with open("files/etc/config/wireless", "w") as f:
+    f.write("""config wifi-device 'radio0'
     option type 'mac80211'
     option path 'platform/18000000.wmac'
     option channel '36'
@@ -132,11 +128,11 @@ config wifi-iface 'default_radio1'
     option ssid 'locust'
     option encryption 'psk2'
     option key '36925888'
-END_WIRELESS
-        
-        # 系统配置
-        cat > files/etc/config/system << 'END_SYSTEM'
-config system
+""")
+
+# 系统配置
+with open("files/etc/config/system", "w") as f:
+    f.write("""config system
     option hostname 'ImmortalWrt'
     option timezone 'CST-8'
     option zonename 'Asia/Shanghai'
@@ -146,11 +142,11 @@ config timeserver 'ntp'
     list server 'time1.cloud.tencent.com'
     list server 'cn.pool.ntp.org'
     option enabled '1'
-END_SYSTEM
-        
-        # 防火墙配置
-        cat > files/etc/config/firewall << 'END_FIREWALL'
-config defaults
+""")
+
+# 防火墙配置
+with open("files/etc/config/firewall", "w") as f:
+    f.write("""config defaults
     option syn_flood '1'
     option input 'ACCEPT'
     option output 'ACCEPT'
@@ -175,14 +171,21 @@ config zone
 config forwarding
     option src 'lan'
     option dest 'wan'
-END_FIREWALL
+""")
+
+# 自定义配置脚本
+with open("files/etc/uci-defaults/99-custom-config", "w") as f:
+    f.write("""#!/bin/sh
+uci set luci.main.mediaurlbase='/luci-static/argon'
+uci commit luci
+exit 0
+""")
+os.chmod("files/etc/uci-defaults/99-custom-config", 0o755)
+
+print("配置文件创建完成")
+PYEOF
         
-        # 自定义配置脚本
-        echo "#!/bin/sh" > files/etc/uci-defaults/99-custom-config
-        echo "uci set luci.main.mediaurlbase='/luci-static/argon'" >> files/etc/uci-defaults/99-custom-config
-        echo "uci commit luci" >> files/etc/uci-defaults/99-custom-config
-        echo "exit 0" >> files/etc/uci-defaults/99-custom-config
-        chmod +x files/etc/uci-defaults/99-custom-config
+        python3 create_configs.py
 
     - name: Build firmware
       run: |
@@ -198,26 +201,25 @@ END_FIREWALL
         cp -r bin/targets/* ../firmware-build/
         echo "固件准备完成"
 
-    - name: Upload firmware to repository
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Create README script
       run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        cd immortalwrt-mt798x
         
-        git checkout firmware 2>/dev/null || git checkout -b firmware
-        
-        git pull origin firmware --allow-unrelated-histories 2>/dev/null || true
-        
-        mkdir -p firmware/$(date +%Y%m%d)
-        
-        cp -r ../firmware-build/* firmware/$(date +%Y%m%d)/
-        
-        cat > firmware/$(date +%Y%m%d)/README.md << 'ENDREADME'
-# ImmortalWrt 自定义固件
+        # 创建README生成脚本
+        cat > create_readme.py << "PYEOF"
+import os
+from datetime import datetime
+
+date_str = datetime.now().strftime("%Y%m%d")
+
+# 创建目录
+os.makedirs(f"../firmware/{date_str}", exist_ok=True)
+
+# 创建日期目录README
+readme_content = f"""# ImmortalWrt 自定义固件
 
 ## 构建信息
-- 构建时间: $(date)
+- 构建时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 - 源码版本: padavanonly/immortalwrt-mt798x-24.10
 - 配置文件: nx60pro-ipailna-high-power.config
 
@@ -234,13 +236,13 @@ END_FIREWALL
 
 ## 刷机说明
 请根据设备型号选择对应的固件文件刷入。
-ENDREADME
-        
-        rm -rf firmware/latest
-        cp -r firmware/$(date +%Y%m%d) firmware/latest
-        
-        cat > firmware/README.md << 'ENDREADME'
-# ImmortalWrt 固件仓库
+"""
+
+with open(f"../firmware/{date_str}/README.md", "w") as f:
+    f.write(readme_content)
+
+# 创建总README
+main_readme = """# ImmortalWrt 固件仓库
 
 此仓库存放自定义编译的ImmortalWrt固件。
 
@@ -260,8 +262,37 @@ ENDREADME
 2. 通过设备管理界面刷入
 3. 默认管理地址: 192.168.6.1
 4. WiFi: locust / locust-5G (密码: 36925888)
-ENDREADME
+"""
+
+with open("../firmware/README.md", "w") as f:
+    f.write(main_readme)
+
+print("README文件创建完成")
+PYEOF
         
+        python3 create_readme.py
+
+    - name: Upload firmware to repository
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        git checkout firmware 2>/dev/null || git checkout -b firmware
+        
+        git pull origin firmware --allow-unrelated-histories 2>/dev/null || true
+        
+        # 复制固件文件
+        cp -r ../firmware-build/* ../firmware/
+        
+        # 创建最新固件链接
+        rm -rf ../firmware/latest
+        date_str=$(date +%Y%m%d)
+        cp -r ../firmware/$date_str ../firmware/latest
+        
+        # 提交更改
+        cd ..
         git add firmware/
         git commit -m "添加固件构建 $(date +%Y%m%d-%H%M%S)" || echo "没有更改可提交"
         git push origin firmware
