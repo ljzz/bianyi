@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       clean_build:
-        description: 'Clean build (true/false)'
+        description: 'Clean build'
         required: false
         default: 'false'
         type: string
@@ -58,7 +58,7 @@ jobs:
     - name: Create config files
       run: |
         mkdir -p openwrt-build/files/etc/uci-defaults
-        cat > openwrt-build/files/etc/uci-defaults/99-custom << 'EOF'
+        cat << 'EOF' > openwrt-build/files/etc/uci-defaults/99-custom
 #!/bin/sh
 uci set network.lan.ipaddr='192.168.6.1'
 uci set network.lan.netmask='255.255.255.0'
@@ -122,6 +122,13 @@ EOF
         cd repo
         mkdir -p firmware
         cp /tmp/immortalwrt-n60pro-*.bin firmware/
+        cat > firmware/README.md << 'EOF'
+# N60 PRO 固件
+编译时间: $(date)
+包含: Argon主题, OpenClash, iStore
+管理地址: 192.168.6.1
+WiFi: locust / locust-5G
+EOF
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         git add firmware/
