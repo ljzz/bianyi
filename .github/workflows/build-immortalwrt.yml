@@ -22,7 +22,7 @@ env:
   # 基础配置
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
   REPO_BRANCH: openwrt-24.10-6.6
-    FEEDS_CONF: feeds.conf.default
+  FEEDS_CONF: feeds.conf.default
   HIGH_POWER_CONFIG_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6/blob/2410/defconfig/nx60pro-ipailna-high-power.config
   # 设备配置
   DEVICE_PROFILE: mediatek_filogic
