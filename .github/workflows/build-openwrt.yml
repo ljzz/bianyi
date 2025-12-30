@@ -1,1 +1,463 @@
+name: Build OpenWrt 237 High Power Firmware
 
+on:
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Clean build (delete cache)'
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: '0 4 * * 0'  # 每周日凌晨4点自动编译
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/**'
+      - 'config/**'
+
+env:
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
+  REPO_BRANCH: openwrt-24.10
+  CONFIG_URL: https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
+  FEEDS_CONF: feeds.conf.default
+  UPLOAD_RELEASE: true
+  FIRMWARE_TAG: 237-high-power
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        path: config-files
+    
+    - name: Setup Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* \
+          /usr/share/dotnet \
+          /usr/local/lib/android \
+          /opt/ghc \
+          /opt/hostedtoolcache/CodeQL
+        
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install \
+          build-essential \
+          ccache \
+          clang \
+          cmake \
+          curl \
+          gawk \
+          gettext \
+          git \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libssl-dev \
+          python3 \
+          python3-pip \
+          python3-setuptools \
+          rsync \
+          subversion \
+          swig \
+          unzip \
+          wget \
+          zlib1g-dev \
+          file \
+          time \
+          gperf \
+          p7zip-full \
+          libelf-dev \
+          libxml-parser-perl \
+          gcc-multilib \
+          flex \
+          bison
+        
+        sudo timedatectl set-timezone "$TZ"
+        mkdir -p /tmp/openwrt
+        ln -sf /tmp/openwrt $GITHUB_WORKSPACE/openwrt
+    
+    - name: Clone OpenWrt Source
+      working-directory: /tmp
+      run: |
+        git clone --depth 1 -b ${{ env.REPO_BRANCH }} ${{ env.REPO_URL }} openwrt
+        cd openwrt
+        echo "源码克隆完成，当前目录：$(pwd)"
+    
+    - name: Download High Power Config
+      working-directory: /tmp/openwrt
+      run: |
+        curl -L -o .config ${{ env.CONFIG_URL }}
+        echo "高功率配置文件下载完成"
+    
+    - name: Setup Custom Feeds
+      working-directory: /tmp/openwrt
+      run: |
+        # 修改 feeds.conf.default 添加需要的软件源
+        cat > feeds.conf.default << 'EOF'
+        src-git-full packages https://git.openwrt.org/feed/packages.git;openwrt-24.10
+        src-git-full luci https://git.openwrt.org/project/luci.git;openwrt-24.10
+        src-git-full routing https://git.openwrt.org/feed/routing.git;openwrt-24.10
+        src-git-full telephony https://git.openwrt.org/feed/telephony.git;openwrt-24.10
+        src-git base https://github.com/padavanonly/immortalwrt-packages.git;openwrt-24.10
+        src-git openclash https://github.com/vernesong/OpenClash.git;master
+        src-git istore https://github.com/linkease/istore;main
+        src-git argon https://github.com/jerrykuku/luci-theme-argon.git;master
+        EOF
+        
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+    
+    - name: Configure Build Options
+      working-directory: /tmp/openwrt
+      run: |
+        # 启用需要的软件包
+        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-store=y" >> .config
+        
+        # 禁用不需要的软件包
+        echo "# CONFIG_PACKAGE_luci-app-adblock is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-docker is not set" >> .config
+        echo "# CONFIG_PACKAGE_docker-ce is not set" >> .config
+        echo "# CONFIG_PACKAGE_adblock is not set" >> .config
+        
+        # 启用IPv6
+        echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq_full_ipv6=y" >> .config
+        echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
+        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
+        
+        # 清理并生成新配置
+        make defconfig
+    
+    - name: Create Custom Configuration Files
+      working-directory: /tmp/openwrt
+      run: |
+        # 创建 files 目录结构
+        mkdir -p files/etc/config
+        mkdir -p files/etc/uci-defaults
+        mkdir -p files/etc/openclash/core
+        
+        # 创建 network 配置文件
+        cat > files/etc/config/network << 'EOF'
+        config interface 'loopback'
+            option device 'lo'
+            option proto 'static'
+            option ipaddr '127.0.0.1'
+            option netmask '255.0.0.0'
+
+        config globals 'globals'
+            option ula_prefix 'fd2e:7be3:59c8::/48'
+
+        config device
+            option name 'br-lan'
+            option type 'bridge'
+            list ports 'eth0'
+
+        config interface 'lan'
+            option device 'br-lan'
+            option proto 'static'
+            option ipaddr '192.168.6.1'
+            option netmask '255.255.255.0'
+            option ip6assign '60'
+            option delegate '0'
+
+        config interface 'wan'
+            option device 'eth1'
+            option proto 'pppoe'
+            option username '15828860970'
+            option password '147258'
+            option ipv6 'auto'
+            option peerdns '0'
+            list dns '223.5.5.5'
+            list dns '223.6.6.6'
+
+        config interface 'wan6'
+            option device 'eth1'
+            option proto 'dhcpv6'
+            option reqaddress 'try'
+            option reqprefix 'auto'
+        EOF
+        
+        # 创建 wireless 配置文件
+        cat > files/etc/config/wireless << 'EOF'
+        config wifi-device 'radio0'
+            option type 'mac80211'
+            option path 'pci0000:00/0000:00:00.0'
+            option channel '36'
+            option band '5g'
+            option htmode 'HE160'
+            option cell_density '0'
+
+        config wifi-iface 'default_radio0'
+            option device 'radio0'
+            option network 'lan'
+            option mode 'ap'
+            option ssid 'locust-5G'
+            option encryption 'psk2+ccmp'
+            option key '36925888'
+            option isolate '0'
+            option wpa_disable_eapol_key_retries '1'
+            option ieee80211r '1'
+            option mobility_domain '1234'
+            option ft_over_ds '1'
+            option ft_psk_generate_local '1'
+
+        config wifi-device 'radio1'
+            option type 'mac80211'
+            option path 'platform/18000000.wmac'
+            option channel '6'
+            option band '2g'
+            option htmode 'HT40'
+            option cell_density '0'
+
+        config wifi-iface 'default_radio1'
+            option device 'radio1'
+            option network 'lan'
+            option mode 'ap'
+            option ssid 'locust'
+            option encryption 'psk2+ccmp'
+            option key '36925888'
+            option isolate '0'
+            option wpa_disable_eapol_key_retries '1'
+        EOF
+        
+        # 创建 dhcp 配置文件
+        cat > files/etc/config/dhcp << 'EOF'
+        config dnsmasq
+            option domainneeded '1'
+            option boguspriv '1'
+            option filterwin2k '0'
+            option localise_queries '1'
+            option rebind_protection '1'
+            option rebind_localhost '1'
+            option local '/lan/'
+            option domain 'lan'
+            option expandhosts '1'
+            option nonegcache '0'
+            option authoritative '1'
+            option readethers '1'
+            option leasefile '/tmp/dhcp.leases'
+            option resolvfile '/tmp/resolv.conf.d/resolv.conf.auto'
+            option localservice '1'
+            option ednspacket_max '1232'
+            option dhcpv4 'server'
+            option dhcpv6 'server'
+            option ra 'server'
+            option ra_management '1'
+
+        config dhcp 'lan'
+            option interface 'lan'
+            option start '100'
+            option limit '150'
+            option leasetime '12h'
+            option dhcpv6 'server'
+            option ra 'server'
+            option ra_management '1'
+            list ra_flags 'managed-config'
+            list ra_flags 'other-config'
+
+        config dhcp 'wan'
+            option interface 'wan'
+            option ignore '1'
+
+        config odhcpd 'odhcpd'
+            option maindhcp '0'
+            option leasefile '/tmp/hosts/odhcpd'
+            option leasetrigger '/usr/sbin/odhcpd-update'
+            option loglevel '4'
+        EOF
+        
+        # 创建系统配置脚本
+        cat > files/etc/uci-defaults/99-custom << 'EOF'
+#!/bin/sh
+
+# 设置时区
+uci set system.@system[0].timezone='CST-8'
+uci set system.@system[0].zonename='Asia/Shanghai'
+
+# 设置主机名
+uci set system.@system[0].hostname='Locust-Router'
+
+# 设置主题为argon
+uci set luci.main.mediaurlbase='/luci-static/argon'
+
+# 开启IPv6
+uci set network.wan6=interface
+uci set network.wan6.proto='dhcpv6'
+uci set network.wan6.device='eth1'
+uci set network.wan6.reqaddress='try'
+uci set network.wan6.reqprefix='auto'
+
+# 配置DDNS（可选）
+uci set ddns.myddns_ipv4=service
+uci set ddns.myddns_ipv4.enabled='1'
+uci set ddns.myddns_ipv4.service_name='changeip.com'
+uci set ddns.myddns_ipv4.domain='your-domain.changeip.org'
+uci set ddns.myddns_ipv4.username='your-username'
+uci set ddns.myddns_ipv4.password='your-password'
+uci set ddns.myddns_ipv4.interface='wan'
+uci set ddns.myddns_ipv4.ip_source='network'
+uci set ddns.myddns_ipv4.ip_network='wan'
+uci set ddns.myddns_ipv4.check_unit='minutes'
+uci set ddns.myddns_ipv4.force_unit='hours'
+uci set ddns.myddns_ipv4.retry_unit='seconds'
+
+# 保存配置
+uci commit
+
+# 重启网络服务（如果需要）
+# /etc/init.d/network restart
+
+exit 0
+EOF
+        
+        chmod +x files/etc/uci-defaults/99-custom
+        
+        echo "自定义配置文件创建完成"
+    
+    - name: Download Packages
+      working-directory: /tmp/openwrt
+      run: |
+        echo "开始下载软件包..."
+        make download -j$(nproc)
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+        echo "软件包下载完成"
+    
+    - name: Build Firmware
+      working-directory: /tmp/openwrt
+      timeout-minutes: 180
+      run: |
+        echo "开始编译固件，使用 $(nproc) 个线程..."
+        
+        # 编译固件，如果失败则降级重试
+        make -j$(nproc) V=s 2>&1 | tee build.log || \
+        make -j$(nproc) 2>&1 | tee build.log || \
+        make -j1 V=s 2>&1 | tee build.log
+        
+        # 检查是否编译成功
+        if [ -f bin/targets/*/*/*.bin ] || [ -f bin/targets/*/*/*.img ]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "FIRMWARE_PATH=$(find bin/targets -name '*.bin' -o -name '*.img' | head -1)" >> $GITHUB_ENV
+          
+          # 获取设备名称
+          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+          
+          echo "FILE_DATE=$(date +"%Y%m%d-%H%M")" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        else
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "编译失败，请检查日志"
+          exit 1
+        fi
+    
+    - name: Collect Firmware Files
+      if: success()
+      working-directory: /tmp/openwrt
+      run: |
+        echo "整理固件文件..."
+        cd bin/targets/*/*
+        
+        # 删除不必要的文件
+        rm -rf packages
+        rm -rf *.buildinfo *.manifest
+        
+        # 创建固件信息文件
+        cat > firmware-info.txt << EOF
+        固件信息
+        ===========
+        编译时间: ${{ env.BUILD_DATE }}
+        源码分支: ${{ env.REPO_BRANCH }}
+        设备型号: ${{ env.DEVICE_NAME }}
+        配置类型: 高功率版
+        包含功能:
+        - 主题: Argon
+        - 插件: OpenClash, iStore
+        - IPv6: 已启用
+        - PPPoE拨号: 已配置
+        - WiFi: locust / locust-5G
+        
+        路由器配置:
+        - 管理地址: 192.168.6.1
+        - WiFi密码: 36925888
+        - PPPoE账号: 15828860970
+        
+        注意: 首次使用请检查网络配置
+        EOF
+        
+        # 列出所有固件文件
+        echo "生成的固件文件:" > file-list.txt
+        find . -type f -name "*.bin" -o -name "*.img" -o -name "*.gz" | sort >> file-list.txt
+        
+        echo "FIRMWARE_DIR=$PWD" >> $GITHUB_ENV
+    
+    - name: Upload firmware to release
+      uses: softprops/action-gh-release@master
+      if: steps.tag.outputs.status == 'success' && !cancelled()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}
+        body_path: release.txt
+        files: ${{ env.FIRMWARE }}/*
+
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        retain_days: 0
+        keep_minimum_runs: 2
+          # OpenWrt 237 高功率固件
+          
+          **编译信息**
+          - 编译时间: ${{ env.BUILD_DATE }}
+          - 设备型号: ${{ env.DEVICE_NAME }}
+          - 源码: ${{ env.REPO_URL }}
+          
+          **固件特性**
+          - 高功率无线配置
+          - Argon 主题
+          - 包含 OpenClash 插件
+          - 包含 iStore 应用商店
+          - 已配置 PPPoE 拨号
+          - WiFi: locust (2.4G) / locust-5G (5G)
+          - IPv6 支持
+          
+          **路由器配置**
+          - 管理地址: 192.168.6.1
+          - WiFi密码: 36925888
+          - PPPoE账号: 已配置
+          
+          **使用说明**
+          1. 选择对应的固件文件刷入
+          2. 首次启动后检查网络连接
+          3. 如需修改配置，请访问 192.168.6.1
+          
+          **注意事项**
+          - 请勿泄露 PPPoE 账号密码
+          - 建议首次使用后修改密码
+          - 此固件仅适用于特定硬件
+          
+          **文件列表**:
+          ```
+          $(find ${{ env.FIRMWARE_DIR }} -type f -name "*.bin" -o -name "*.img" | xargs -I {} basename {} | sort)
+          ```
+        draft: false
+        prerelease: false
+        files: ${{ env.FIRMWARE_DIR }}/*
+    
+    - name: Remove old Releases
+      uses: dev-drprasad/delete-older-releases@master
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 6
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
