@@ -163,13 +163,27 @@ jobs:
         echo "uci commit luci" >> files/etc/uci-defaults/99-custom-config
         echo "exit 0" >> files/etc/uci-defaults/99-custom-config
         chmod +x files/etc/uci-defaults/99-custom-config
+# 以下修改需集成到你的 build-immortalwrt.yml 文件中
 
     - name: Build firmware
       run: |
         cd immortalwrt-mt798x
         echo "开始编译固件，这可能需要较长时间..."
+        # 1. 编译前清理，避免残留文件占用空间
+        make clean
+        # 2. 使用精简编译模式，减少调试信息（可选）
+        # 如果空间依然紧张，可以尝试加上这个参数
+        # make -j$(nproc) V=0
+        # 3. 开始编译，如果失败则降级为单线程编译
         make -j$(nproc) || make -j1 V=s
         echo "固件编译完成"
+
+    - name: Check disk space before critical steps
+      run: |
+        # 在关键步骤前检查剩余空间
+        df -h
+        echo "剩余内存:"
+        free -h
 
     - name: Prepare firmware for upload
       run: |
