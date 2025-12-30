@@ -1,0 +1,71 @@
+name: Build NX60 Pro ImmortalWrt
+
+on:
+  workflow_dispatch: # 手动触发
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/**'
+      - '.github/config/**'
+      - '.github/files/**'
+  schedule:
+    - cron: '0 2 * * 0' # 每周日凌晨2点（可选）
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: 'custom-files' # 将我们的仓库检出到此目录
+
+      - name: Build ImmortalWrt for NX60 Pro
+        uses: docker-openwrt-buildaction@v2
+        with:
+          # 使用237的源码
+          openwrt-repo: 'https://github.com/padavanonly/immortalwrt-mt798x-24.10'
+          openwrt-branch: 'openwrt-24.10-6.6'
+          # 使用我们自定义的配置文件
+          config-file: 'custom-files/.github/config/nx60pro.config'
+          # 包含我们预置的文件
+          files-root: 'custom-files/.github/files'
+          # 构建参数
+          make-flags: '-j$(nproc)'
+          # 上传构建好的固件
+          upload-artifact: true
+          artifact-name: 'immortalwrt-nx60pro'
+
+      - name: Upload to Firmware Branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 设置Git身份
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 切换到或创建firmware分支
+          git checkout firmware 2>/dev/null || git checkout -b firmware
+          git pull origin firmware --rebase 2>/dev/null || true
+          
+          # 创建带日期的目录并复制固件
+          BUILD_DATE=$(date +%Y%m%d)
+          mkdir -p "firmware/$BUILD_DATE"
+          
+          # 复制构建生成的固件（路径根据action输出调整）
+          find . -name "*.bin" -o -name "*.img" | head -5 | while read file; do
+            cp "$file" "firmware/$BUILD_DATE/" 2>/dev/null || true
+          done
+          
+          # 更新latest链接
+          rm -rf firmware/latest
+          cp -r "firmware/$BUILD_DATE" firmware/latest
+          
+          # 生成简短的README
+          echo "# NX60 Pro 固件 $BUILD_DATE" > firmware/latest/README.md
+          echo "包含: Argon主题, OpenClash, iStore | 管理IP: 192.168.6.1" >> firmware/latest/README.md
+          
+          # 提交并推送
+          git add firmware/
+          git commit -m "更新NX60 Pro固件 $BUILD_DATE" || echo "无新文件"
+          git push origin firmware
