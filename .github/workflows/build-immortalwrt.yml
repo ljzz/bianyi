@@ -1,390 +1,290 @@
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-#
-# 文件：.github/workflows/build-immortalwrt.yml
-# 描述：使用 GitHub Actions 构建 ImmortalWrt 高功率固件
-#
-# 版权所有 (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# 这是自由软件，遵循 MIT 许可证。
-# 更多信息请参阅 /LICENSE
-#
-
-name: Build 237 High Power ImmortalWrt
+name: Build ImmortalWrt Custom Firmware
 
 on:
-  repository_dispatch:
-  workflow_dispatch:
-    inputs:
-      clean_build:
-        description: '清理构建缓存'
-        required: false
-        default: false
-        type: boolean
-
-env:
-  # 基础配置
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
-  REPO_BRANCH: openwrt-24.10-6.6
-  
-  # 高功率配置文件
-  HIGH_POWER_CONFIG_URL: https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
-  
-  # 功能配置
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
-  FIRMWARE_TAG: padavanonly-237-mt798x-6.6
-  TZ: Asia/Shanghai
-  
-  # 网络配置
-  LAN_IP: 192.168.6.1
-  WIFI_SSID: locust
-  WIFI_SSID_5G: locust-5G
-  WIFI_PASSWORD: 36925888
-  PPPOE_USERNAME: 15828860970
-  PPPOE_PASSWORD: 147258
+  workflow_dispatch:  # 允许手动触发
+  push:
+    branches: [ main ]  # 推送到main分支时自动触发
+  schedule:
+    - cron: '0 2 * * 0'  # 每周日凌晨2点自动运行
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-
-    - name: Initialization environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Set up build environment
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
-
-    - name: Clone source code
-      working-directory: /workdir
+        sudo apt-get update
+        sudo apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison \
+          build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar \
+          flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man \
+          intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+          libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+          libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip \
+          p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils \
+          python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig \
+          texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+    
+    - name: Clone ImmortalWrt source
       run: |
-        df -hT $PWD
-        git clone -b $REPO_BRANCH --single-branch --filter=blob:none $REPO_URL openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-    - name: Download high power configuration
+        git clone -b openwrt-24.10-6.6 --single-branch --filter=blob:none \
+          https://github.com/padavanonly/immortalwrt-mt798x-24.10 immortalwrt-mt798x
+        cd immortalwrt-mt798x
+        echo "源码克隆完成"
+    
+    - name: Download high-power config
       run: |
-        cd /workdir/openwrt
-        echo "下载高功率配置文件..."
-        wget "$HIGH_POWER_CONFIG_URL" -O .config
-        echo "高功率配置文件下载完成"
-
-    - name: Update and install feeds
+        cd immortalwrt-mt798x
+        wget -O nx60pro-high-power.config \
+          https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
+    
+    - name: Setup feeds and config
       run: |
-        cd /workdir/openwrt
+        cd immortalwrt-mt798x
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-
-    - name: Install custom packages
-      run: |
-        cd /workdir/openwrt
         
-        # 安装 Argon 主题
-        echo "安装 Argon 主题..."
-        ./scripts/feeds install luci-theme-argon || echo "Argon 主题安装失败或已安装"
+        cp nx60pro-high-power.config .config
         
-        # 安装 OpenClash
-        echo "安装 OpenClash..."
-        ./scripts/feeds install luci-app-openclash || echo "OpenClash 安装失败或已安装"
+        make defconfig
         
-        # 尝试安装 iStore
-        echo "尝试安装 iStore..."
-        ./scripts/feeds install luci-app-store || echo "iStore 未在 feeds 中找到，跳过安装"
-
-    - name: Apply custom configurations
-      run: |
-        cd /workdir/openwrt
+        # 移除不需要的包
+        sed -i '/CONFIG_PACKAGE_luci-app-adblock/d' .config
+        sed -i '/CONFIG_PACKAGE_adblock/d' .config
+        sed -i '/CONFIG_PACKAGE_docker/d' .config
+        sed -i '/CONFIG_PACKAGE_dockerd/d' .config
+        sed -i '/CONFIG_PACKAGE_luci-app-dockerman/d' .config
         
-        # 启用 Argon 主题
+        # 添加需要的包
+        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-istore=y" >> .config
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
         echo "CONFIG_PACKAGE_luci-theme-argon-config=y" >> .config
         
-        # 启用 OpenClash
-        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-        
-        # 启用 IPv6 支持
+        # IPv6支持
         echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
         echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
         echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
-        
-        # 禁用不需要的包
-        sed -i '/CONFIG_PACKAGE_luci-app-adblock/d' .config
-        sed -i '/CONFIG_PACKAGE_luci-app-docker/d' .config
-        sed -i '/CONFIG_PACKAGE_docker/d' .config
-        sed -i '/CONFIG_PACKAGE_dockerd/d' .config
-        echo "# CONFIG_PACKAGE_luci-app-adblock is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-docker is not set" >> .config
-        echo "# CONFIG_PACKAGE_docker is not set" >> .config
-        echo "# CONFIG_PACKAGE_dockerd is not set" >> .config
-
-    - name: Generate custom files
+    
+    - name: Create custom configuration files
       run: |
-        cd /workdir/openwrt
-        
-        # 创建自定义文件目录结构
+        cd immortalwrt-mt798x
         mkdir -p files/etc/config
         mkdir -p files/etc/uci-defaults
-        mkdir -p files/etc/wireless
         
-        # 1. 网络配置文件
+        # 网络配置（建议将敏感信息改为使用GitHub Secrets）
         cat > files/etc/config/network << 'EOF'
 config interface 'loopback'
-        option device 'lo'
-        option proto 'static'
-        option ipaddr '127.0.0.1'
-        option netmask '255.0.0.0'
+    option device 'lo'
+    option proto 'static'
+    option ipaddr '127.0.0.1'
+    option netmask '255.0.0.0'
 
 config globals 'globals'
-        option ula_prefix 'fd00:ab:cd::/48'
+    option ula_prefix 'fd10:db8:1234::/48'
 
 config device
-        option name 'br-lan'
-        option type 'bridge'
-        list ports 'eth0'
+    option name 'br-lan'
+    option type 'bridge'
+    list ports 'eth0'
 
 config interface 'lan'
-        option device 'br-lan'
-        option proto 'static'
-        option ipaddr '${{ env.LAN_IP }}'
-        option netmask '255.255.255.0'
-        option ip6assign '60'
+    option device 'br-lan'
+    option proto 'static'
+    option ipaddr '192.168.6.1'
+    option netmask '255.255.255.0'
+    option ip6assign '60'
 
 config interface 'wan'
-        option device 'eth1'
-        option proto 'pppoe'
-        option username '${{ env.PPPOE_USERNAME }}'
-        option password '${{ env.PPPOE_PASSWORD }}'
-        option ipv6 'auto'
-
-config interface 'wan6'
-        option device 'eth1'
-        option proto 'dhcpv6'
+    option device 'eth1'
+    option proto 'pppoe'
+    option username '15828860970'
+    option password '147258'
+    option ipv6 'auto'
 EOF
-
-        # 2. 无线配置文件
+        
+        # 无线配置
         cat > files/etc/config/wireless << 'EOF'
 config wifi-device 'radio0'
-        option type 'mac80211'
-        option path 'platform/18000000.wbsys'
-        option channel '36'
-        option band '5g'
-        option htmode 'HE80'
-        option cell_density '0'
+    option type 'mac80211'
+    option path 'platform/18000000.wmac'
+    option channel '36'
+    option band '5g'
+    option htmode 'HE80'
+    option disabled '0'
 
 config wifi-iface 'default_radio0'
-        option device 'radio0'
-        option network 'lan'
-        option mode 'ap'
-        option ssid '${{ env.WIFI_SSID_5G }}'
-        option encryption 'psk2'
-        option key '${{ env.WIFI_PASSWORD }}'
-        option disabled '0'
+    option device 'radio0'
+    option network 'lan'
+    option mode 'ap'
+    option ssid 'locust-5G'
+    option encryption 'psk2'
+    option key '36925888'
 
 config wifi-device 'radio1'
-        option type 'mac80211'
-        option path 'platform/18000000.wbsys'
-        option channel 'auto'
-        option band '2g'
-        option htmode 'HT20'
-        option cell_density '0'
+    option type 'mac80211'
+    option path 'platform/18000000.wmac'
+    option channel 'auto'
+    option band '2g'
+    option htmode 'HE20'
+    option disabled '0'
 
 config wifi-iface 'default_radio1'
-        option device 'radio1'
-        option network 'lan'
-        option mode 'ap'
-        option ssid '${{ env.WIFI_SSID }}'
-        option encryption 'psk2'
-        option key '${{ env.WIFI_PASSWORD }}'
-        option disabled '0'
+    option device 'radio1'
+    option network 'lan'
+    option mode 'ap'
+    option ssid 'locust'
+    option encryption 'psk2'
+    option key '36925888'
 EOF
-
-        # 3. 系统配置文件
-        cat > files/etc/config/system << 'EOF'
-config system
-        option hostname 'ImmortalWrt'
-        option timezone 'CST-8'
-        option ttylogin '0'
-        option log_size '64'
-        option urandom_seed '0'
-
-config timeserver 'ntp'
-        list server 'time1.cloud.tencent.com'
-        list server 'time2.cloud.tencent.com'
-        list server 'time3.cloud.tencent.com'
-        list server 'pool.ntp.org'
-        option enabled '1'
-        option enable_server '0'
-EOF
-
-        # 4. 默认配置脚本
-        cat > files/etc/uci-defaults/99-custom << 'EOF'
+        
+        # 基础配置
+        cat > files/etc/uci-defaults/99-custom-config << 'EOF'
 #!/bin/sh
-
-# 设置 Argon 为默认主题
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
-
-# 设置时区
-uci set system.@system[0].timezone='CST-8'
-uci set system.@system[0].zonename='Asia/Shanghai'
-uci commit system
-
-echo "自定义配置应用成功"
 exit 0
 EOF
-
-        chmod +x files/etc/uci-defaults/99-custom
-
-    - name: Finalize configuration
+        
+        chmod +x files/etc/uci-defaults/99-custom-config
+    
+    - name: Build firmware
       run: |
-        cd /workdir/openwrt
-        make defconfig
-
-    - name: Download packages
-      id: package
+        cd immortalwrt-mt798x
+        echo "开始编译固件，这可能需要较长时间..."
+        make -j$(nproc) || make -j1 V=s
+        echo "固件编译完成"
+    
+    - name: Prepare firmware for upload
       run: |
-        cd /workdir/openwrt
-        make download -j$(nproc)
+        cd immortalwrt-mt798x
+        # 创建固件目录并复制文件
+        mkdir -p ../firmware-build
+        cp -r bin/targets/* ../firmware-build/
         
-        # 检查并清理无效的下载文件
-        echo "检查下载的文件..."
-        find dl -size -1024c -exec ls -l {} \; 2>/dev/null | head -5 || true
-        find dl -size -1024c -exec rm -f {} \; 2>/dev/null || true
-        echo "下载完成"
-
-    - name: Compile the firmware
-      id: compile
-      run: |
-        cd /workdir/openwrt
-        
-        # 如果需要清理构建
-        if [[ "${{ github.event.inputs.clean_build }}" == "true" ]]; then
-          echo "执行清理构建..."
-          make clean
-        fi
-        
-        echo "开始编译，使用 $(nproc) 个线程..."
-        
-        # 编译固件
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        
-        # 检查编译结果
-        if [ $? -eq 0 ]; then
-          echo "status=success" >> $GITHUB_OUTPUT
-          
-          # 提取设备名称
-          if grep -q '^CONFIG_TARGET.*DEVICE.*=y' .config; then
-            grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-            if [ -s DEVICE_NAME ]; then
-              DEVICE=$(cat DEVICE_NAME)
-              echo "DEVICE_NAME=_${DEVICE}" >> $GITHUB_ENV
-              echo "检测到设备: ${DEVICE}"
-            fi
-          fi
-          
-          # 设置文件日期
-          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-          echo "编译成功！"
-        else
-          echo "编译失败"
-          exit 1
-        fi
-
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
-
-    - name: Organize firmware files
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
-      run: |
-        cd /workdir/openwrt/bin/targets/*/*
-        echo "整理固件文件..."
-        
-        # 删除 packages 目录，只保留固件
-        rm -rf packages
-        
-        # 创建固件信息文件
-        FIRMWARE_FILE=$(ls *.bin 2>/dev/null | head -1)
-        if [ -n "$FIRMWARE_FILE" ]; then
-          echo "固件信息" > firmware-info.txt
-          echo "==========" >> firmware-info.txt
-          echo "文件名: $FIRMWARE_FILE" >> firmware-info.txt
-          echo "编译时间: $(date '+%Y-%m-%d %H:%M:%S')" >> firmware-info.txt
-          echo "设备: ${DEVICE_NAME:-unknown}" >> firmware-info.txt
-          echo "" >> firmware-info.txt
-          echo "内置功能:" >> firmware-info.txt
-          echo "- Argon 主题" >> firmware-info.txt
-          echo "- OpenClash 插件" >> firmware-info.txt
-          echo "- iStore 应用商店" >> firmware-info.txt
-          echo "- IPv6 完整支持" >> firmware-info.txt
-          echo "" >> firmware-info.txt
-          echo "网络配置:" >> firmware-info.txt
-          echo "管理地址: ${{ env.LAN_IP }}" >> firmware-info.txt
-          echo "2.4G WiFi: ${{ env.WIFI_SSID }}" >> firmware-info.txt
-          echo "5G WiFi: ${{ env.WIFI_SSID_5G }}" >> firmware-info.txt
-          echo "WiFi密码: ${{ env.WIFI_PASSWORD }}" >> firmware-info.txt
-          echo "PPPoE账号: ${{ env.PPPOE_USERNAME }}" >> firmware-info.txt
-        fi
-        
-        echo "FIRMWARE_PATH=$(pwd)" >> $GITHUB_ENV
-        echo "整理完成"
-
-    - name: Upload firmware as artifact
-      uses: actions/upload-artifact@v3
-      if: steps.organize.outputs.status == 'success' && !cancelled()
-      with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: |
-          ${{ env.FIRMWARE_PATH }}/*.bin
-          ${{ env.FIRMWARE_PATH }}/firmware-info.txt
-        retention-days: 7
-
-    - name: Generate release tag
-      id: tag
-      if: env.UPLOAD_RELEASE == 'true' && steps.organize.outputs.status == 'success' && !cancelled()
-      run: |
-        echo "生成发布标签..."
-        RELEASE_TAG="$(date +"%Y.%m.%d-%H%M")-$FIRMWARE_TAG"
-        echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
-        echo "标签: ${RELEASE_TAG}"
-
-    - name: Upload firmware to release
-      uses: softprops/action-gh-release@v1
-      if: steps.tag.outputs.status == 'success' && !cancelled()
+        # 获取固件信息
+        find bin/targets -name "*.bin" -o -name "*.img" | head -5 > ../firmware-files.txt
+        echo "固件准备完成"
+    
+    - name: Upload firmware to repository
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # 设置Git配置
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # 创建或切换到firmware分支
+        git checkout -b firmware 2>/dev/null || git checkout firmware
+        
+        # 创建固件目录
+        mkdir -p firmware/$(date +%Y%m%d)
+        
+        # 复制固件文件
+        cp -r firmware-build/* firmware/$(date +%Y%m%d)/
+        
+        # 创建README文件
+        cat > firmware/$(date +%Y%m%d)/README.md << 'EOF'
+# ImmortalWrt 自定义固件
+
+## 构建信息
+- 构建时间: $(date)
+- 源码版本: padavanonly/immortalwrt-mt798x-24.10
+- 配置文件: nx60pro-ipailna-high-power.config
+
+## 包含功能
+- 高功率版本固件
+- Argon主题
+- OpenClash插件
+- iStore应用商店
+- 已移除AdBlock和Docker
+- 预配置PPPoE拨号
+- WiFi名称: locust / locust-5G
+- 管理地址: 192.168.6.1
+- IPv6自动配置
+
+## 刷机说明
+请根据设备型号选择对应的固件文件刷入。
+
+## 文件列表
+EOF
+        
+        # 添加文件列表到README
+        find firmware/$(date +%Y%m%d) -type f -name "*.bin" -o -name "*.img" | sort >> firmware/$(date +%Y%m%d)/README.md
+        
+        # 创建最新固件链接
+        LATEST_DIR="firmware/latest"
+        rm -rf $LATEST_DIR
+        cp -r firmware/$(date +%Y%m%d) $LATEST_DIR
+        
+        # 更新总的README
+        cat > firmware/README.md << 'EOF'
+# ImmortalWrt 固件仓库
+
+此仓库存放自定义编译的ImmortalWrt固件。
+
+## 目录结构
+- `latest/` - 最新编译的固件
+- `YYYYMMDD/` - 按日期组织的固件版本
+
+## 构建配置
+固件基于以下配置编译：
+- 源码: https://github.com/padavanonly/immortalwrt-mt798x-24.10
+- 配置文件: nx60pro-ipailna-high-power.config
+- 包含: Argon主题, OpenClash, iStore
+- 排除: AdBlock, Docker
+
+## 使用说明
+1. 下载对应设备型号的固件
+2. 通过设备管理界面刷入
+3. 默认管理地址: 192.168.6.1
+4. WiFi: locust / locust-5G (密码: 36925888)
+
+## 历史版本
+EOF
+        
+        # 添加历史版本链接
+        find firmware -maxdepth 1 -type d -name "20*" | sort -r | head -10 >> firmware/README.md
+        
+        # 提交到仓库
+        git add firmware/
+        git commit -m "添加固件构建 $(date +%Y%m%d-%H%M%S)"
+        git push origin firmware --force
+        
+        echo "固件已上传到 firmware 分支"
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      if: github.ref == 'refs/heads/main'
       with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        name: "ImmortalWrt 高功率固件 $(date +'%Y-%m-%d %H:%M')"
-        body_path: ${{ env.FIRMWARE_PATH }}/firmware-info.txt
-        files: ${{ env.FIRMWARE_PATH }}/*.bin
+        files: |
+          firmware-build/**/*.bin
+          firmware-build/**/*.img
+        tag_name: build-$(date +%Y%m%d-%H%M%S)
+        name: ImmortalWrt Build $(date +%Y-%m-%d)
+        body: |
+          自定义ImmortalWrt固件编译完成
+          
+          编译时间: $(date)
+          源码版本: padavanonly/immortalwrt-mt798x-24.10
+          
+          包含功能:
+          - 高功率版本固件
+          - Argon主题
+          - OpenClash插件
+          - iStore应用商店
+          - 已移除AdBlock和Docker
+          - 预配置PPPoE拨号
+          - WiFi名称: locust / locust-5G
+          - 管理地址: 192.168.6.1
+          - IPv6自动配置
+          
+          固件已同时上传到 `firmware` 分支。
         draft: false
         prerelease: false
-
-    - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
-      if: always()
-      with:
-        retain_days: 0
-        keep_minimum_runs: 2
-
-    - name: Remove old releases
-      uses: dev-drprasad/delete-older-releases@v0.2.0
-      if: env.UPLOAD_RELEASE == 'true'
-      with:
-        keep_latest: 6
-        delete_tag_pattern: "*-${{ env.FIRMWARE_TAG }}"
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
