@@ -1,10 +1,10 @@
-name: Build N60 PRO Firmware
+name: Build N60 PRO Firmware1
 
 on:
   workflow_dispatch:
     inputs:
       clean_build:
-        description: 'Clean build'
+        description: 'Clean build (true/false)'
         required: false
         default: 'false'
         type: string
@@ -55,11 +55,11 @@ jobs:
         echo "CONFIG_PACKAGE_luci-app-docker=n" >> .config
         make defconfig
 
-    - name: Create config files without heredoc
+    - name: Create config files using Python
       run: |
         mkdir -p openwrt-build/files/etc/uci-defaults
-        cat > openwrt-build/files/etc/uci-defaults/99-custom << "ENDOFFILE"
-#!/bin/sh
+        python3 -c "
+config = '''#!/bin/sh
 uci set network.lan.ipaddr='192.168.6.1'
 uci set network.lan.netmask='255.255.255.0'
 uci delete network.wan 2>/dev/null || true
@@ -78,7 +78,10 @@ uci set wireless.default_radio1.key='36925888'
 uci set wireless.default_radio1.encryption='psk2'
 uci commit
 exit 0
-ENDOFFILE
+'''
+with open('openwrt-build/files/etc/uci-defaults/99-custom', 'w') as f:
+    f.write(config)
+"
         chmod +x openwrt-build/files/etc/uci-defaults/99-custom
 
     - name: Download dependencies
@@ -97,46 +100,67 @@ ENDOFFILE
         make -j$(nproc) || make -j1 V=s
         echo "Compilation complete!"
 
-    - name: Find firmware
+    - name: Find and copy firmware
       run: |
         cd openwrt-build
-        find . -name "*.bin" -type f | grep -i "n60pro\|cmcc" | head -5
+        # Look for firmware
+        find_result=$(find . -name "*.bin" -type f | grep -i "n60pro\|cmcc" | head -5)
+        if [ -n "$find_result" ]; then
+          echo "Found firmware:"
+          echo "$find_result"
+          mkdir -p /tmp/firmware_output
+          for f in $find_result; do
+            cp "$f" /tmp/firmware_output/
+          done
+        else
+          echo "No firmware found with expected name, listing all .bin files:"
+          find . -name "*.bin" -type f | head -20
+        fi
 
-    - name: Copy firmware to workspace
-      run: |
-        mkdir -p ${{ github.workspace }}/firmware
-        find openwrt-build -name "*n60pro*.bin" -type f -exec cp {} ${{ github.workspace }}/firmware/ \;
-        find openwrt-build -name "*cmcc*.bin" -type f -exec cp {} ${{ github.workspace }}/firmware/ \;
-
-    - name: Upload firmware to repository
+    - name: Upload to repository
       if: success()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        # Clone the target repository
-        git clone https://x-access-token:$GITHUB_TOKEN@github.com/ljzz/bianyi.git output-repo
-        cd output-repo
+        # Clone target repo
+        git clone https://x-access-token:$GITHUB_TOKEN@github.com/ljzz/bianyi.git repo
+        cd repo
         
-        # Create firmware directory
+        # Create or clear firmware directory
         mkdir -p firmware
+        rm -rf firmware/*
         
-        # Copy any firmware files found
-        if [ -d "${{ github.workspace }}/firmware" ]; then
-          cp ${{ github.workspace }}/firmware/*.bin firmware/ 2>/dev/null || true
+        # Copy any firmware found
+        if [ -d "/tmp/firmware_output" ]; then
+          cp /tmp/firmware_output/*.bin firmware/ 2>/dev/null || true
         fi
         
-        # Create a simple README
-        echo "# N60 PRO Firmware" > firmware/README.md
-        echo "Built on: $(date)" >> firmware/README.md
+        # Create README
+        echo "# N60 PRO 固件" > firmware/README.md
+        echo "编译时间: $(date)" >> firmware/README.md
         echo "" >> firmware/README.md
-        echo "Available files:" >> firmware/README.md
-        ls -la firmware/*.bin 2>/dev/null >> firmware/README.md || echo "No firmware files found" >> firmware/README.md
+        echo "包含插件:" >> firmware/README.md
+        echo "- Argon 主题" >> firmware/README.md
+        echo "- OpenClash" >> firmware/README.md
+        echo "- iStore" >> firmware/README.md
+        echo "" >> firmware/README.md
+        echo "默认配置:" >> firmware/README.md
+        echo "- 管理地址: 192.168.6.1" >> firmware/README.md
+        echo "- WiFi 2.4G: locust (密码: 36925888)" >> firmware/README.md
+        echo "- WiFi 5G: locust-5G (密码: 36925888)" >> firmware/README.md
+        echo "- PPPoE: 已预配置" >> firmware/README.md
+        echo "- IPv6: 自动启用" >> firmware/README.md
         
-        # Configure git
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
+        # List files
+        echo "" >> firmware/README.md
+        echo "文件列表:" >> firmware/README.md
+        ls -la firmware/*.bin 2>/dev/null >> firmware/README.md || echo "暂无固件文件" >> firmware/README.md
         
         # Commit and push
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
         git add firmware/
-        git commit -m "Add firmware build from $(date +%Y%m%d-%H%M%S)" || echo "No changes to commit"
+        git commit -m "更新固件: $(date +%Y%m%d-%H%M%S)"
         git push origin main
+        
+        echo "✅ 固件已上传到 https://github.com/ljzz/bianyi/tree/main/firmware"
