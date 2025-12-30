@@ -1,0 +1,9 @@
+#!/bin/sh
+# 设置Argon为默认主题
+uci set luci.main.mediaurlbase='/luci-static/argon'
+uci commit luci
+
+# 确保网络配置生效
+/etc/init.d/network restart
+
+exit 0
