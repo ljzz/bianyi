@@ -11,14 +11,12 @@ on:
 
 env:
   SOURCE_URL: "https://github.com/padavanonly/immortalwrt-mt798x-24.10"
-  CONFIG_REPO: "https://github.com/padavanonly/immortalwrt-mt798x-6.6/blob/2410/defconfig/nx60pro-ipailna-high-power.config"
-  CONFIG_BRANCH: "2410"
-  CONFIG_PATH: "defconfig/nx60pro-ipailna-high-power.config"
+  CONFIG_REPO: "https://github.com/padavanonly/immortalwrt-mt798x-6.6"
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 200
 
     steps:
     - name: 检出仓库
@@ -39,161 +37,70 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 获取高功率配置文件
+    - name: 创建高功率配置文件
       run: |
         cd openwrt
-        echo "正在获取高功率配置文件..."
+        echo "创建高功率配置文件..."
         
-        # 方法1: 尝试直接下载（可能因DNS问题失败）
-        if wget -q -O downloaded.config "https://raw.githubusercontent.com/${{ env.CONFIG_REPO#https://github.com/ }}/$CONFIG_BRANCH/$CONFIG_PATH"; then
-          echo "✅ 通过直接下载获取配置文件"
-          mv downloaded.config .config
-        else
-          echo "⚠️ 直接下载失败，尝试克隆仓库获取..."
-          # 方法2: 克隆整个配置仓库获取文件
-          git clone --depth=1 --branch=$CONFIG_BRANCH $CONFIG_REPO config-repo
-          if [ -f "config-repo/$CONFIG_PATH" ]; then
-            cp "config-repo/$CONFIG_PATH" .config
-            echo "✅ 通过克隆仓库获取配置文件"
-          else
-            echo "❌ 两种方式均无法获取配置文件"
-            echo "在 config-repo 中找到的文件："
-            find config-repo -name "*.config" -type f | head -10
-            exit 1
-          fi
-        fi
+        # 直接创建 .config 文件，避免下载问题
+        cat > .config << 'EOF'
+CONFIG_TARGET_MEDIATEK=y
+CONFIG_TARGET_MEDIATEK_FILOGIC=y
+CONFIG_TARGET_MEDIATEK_FILOGIC_DEVICE_CMCC_N60_PRO=y
+CONFIG_TARGET_PROFILE="CMCC N60 PRO"
+CONFIG_TARGET_ROOTFS_PARTSIZE=512
+CONFIG_TARGET_ROOTFS_TARGZ=n
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_KERNEL_KALLSYMS=n
+CONFIG_KERNEL_DEBUG_INFO=n
+CONFIG_KERNEL_DEBUG_KERNEL=n
+CONFIG_KERNEL_PERF_EVENTS=n
+CONFIG_KERNEL_PROFILING=n
+EOF
+        
+        echo "✅ 高功率配置文件创建完成"
 
-    - name: 修复配置文件格式
+    - name: 配置软件包
       run: |
         cd openwrt
-        echo "修复 .config 文件格式..."
+        echo "配置软件包..."
         
-        # 1. 备份原始文件
-        cp .config .config.backup
+        # 使用 echo 逐行添加配置，避免格式问题
+        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-istore=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-istore-zh-cn=y" >> .config
         
-        # 2. 清理行首空白（空格和制表符）
-        sed -i 's/^[[:space:]]*//' .config
-        
-        # 3. 修复可能的HTML实体字符
-        sed -i 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g' .config
-        
-        # 4. 删除空行和仅含空格的行
-        sed -i '/^[[:space:]]*$/d' .config
-        
-        # 5. 确保每行都是有效的配置格式
-        # 移除可能存在的注释中的中文字符引起的编码问题
-        sed -i 's/#.*$//' .config
-        sed -i '/^$/d' .config
-        
-        echo "格式修复完成，差异对比："
-        diff -u .config.backup .config | head -20 || true
-
-    - name: 配置目标设备与内核
-      run: |
-        cd openwrt
-        echo "配置目标设备..."
-        
-        # 设置目标平台和设备
-        echo "CONFIG_TARGET_MEDIATEK_FILOGIC=y" >> .config
-        echo "CONFIG_TARGET_MEDIATEK_FILOGIC_DEVICE_CMCC_N60_PRO=y" >> .config
-        
-        # 应用基础配置
-        make defconfig
-        echo "✅ 基础配置完成"
-
-    - name: 自定义软件包选择
-      run: |
-        cd openwrt
-        echo "配置自定义软件包..."
-        
-        # 必须安装的组件
-        cat >> .config << 'CONFIG_EOF'
-CONFIG_PACKAGE_luci-theme-argon=y
-CONFIG_PACKAGE_luci-app-openclash=y
-CONFIG_PACKAGE_luci-app-istore=y
-CONFIG_PACKAGE_luci-i18n-istore-zh-cn=y
-CONFIG_EOF
-        
-        # OpenClash 核心依赖
-        cat >> .config << 'CONFIG_EOF'
-CONFIG_PACKAGE_bash=y
-CONFIG_PACKAGE_coreutils=y
-CONFIG_PACKAGE_coreutils-nohup=y
-CONFIG_PACKAGE_curl=y
-CONFIG_PACKAGE_ip-full=y
-CONFIG_PACKAGE_iptables-mod-tproxy=y
-CONFIG_PACKAGE_iptables-mod-extra=y
-CONFIG_PACKAGE_kmod-inet-diag=y
-CONFIG_PACKAGE_kmod-nft-tproxy=y
-CONFIG_PACKAGE_luci-compat=y
-CONFIG_EOF
+        # OpenClash 依赖
+        echo "CONFIG_PACKAGE_bash=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils-nohup=y" >> .config
+        echo "CONFIG_PACKAGE_curl=y" >> .config
+        echo "CONFIG_PACKAGE_ip-full=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-tproxy=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
+        echo "CONFIG_PACKAGE_luci-compat=y" >> .config
         
         # 移除不需要的包
-        cat >> .config << 'CONFIG_EOF'
-CONFIG_PACKAGE_luci-app-adblock=n
-CONFIG_PACKAGE_luci-app-docker=n
-CONFIG_PACKAGE_docker=n
-CONFIG_PACKAGE_dockerd=n
-CONFIG_EOF
+        echo "CONFIG_PACKAGE_luci-app-adblock=n" >> .config
+        echo "CONFIG_PACKAGE_luci-app-docker=n" >> .config
+        echo "CONFIG_PACKAGE_docker=n" >> .config
+        echo "CONFIG_PACKAGE_dockerd=n" >> .config
         
-        # 更新配置
+        # 应用配置
         make defconfig
         echo "✅ 软件包配置完成"
 
-    - name: 创建自定义配置文件
+    - name: 创建网络配置文件
       run: |
-        echo "生成默认配置文件..."
+        echo "创建网络配置文件..."
         mkdir -p openwrt/files/etc/uci-defaults
         
-        # 使用Python创建文件，避免YAML heredoc问题
-        python3 -c "
-config_content = '''#!/bin/sh
-# 自定义初始配置脚本
-# LAN 设置
-uci set network.lan.ipaddr='192.168.6.1'
-uci set network.lan.netmask='255.255.255.0'
-
-# PPPoE 拨号设置
-uci delete network.wan 2>/dev/null || true
-uci set network.wan=interface
-uci set network.wan.proto='pppoe'
-uci set network.wan.username='15828860970'
-uci set network.wan.password='147258'
-uci set network.wan.ipv6='auto'
-
-# IPv6 配置
-uci set dhcp.lan.dhcpv6='server'
-uci set dhcp.lan.ra='server'
-uci set dhcp.lan.ra_management='1'
-
-# 2.4GHz WiFi 设置
-uci set wireless.radio0.channel='auto'
-uci set wireless.radio0.htmode='HE40'
-uci set wireless.default_radio0.ssid='locust'
-uci set wireless.default_radio0.key='36925888'
-uci set wireless.default_radio0.encryption='psk2'
-
-# 5GHz WiFi 设置
-uci set wireless.radio1.channel='auto'
-uci set wireless.radio1.htmode='HE160'
-uci set wireless.default_radio1.ssid='locust-5G'
-uci set wireless.default_radio1.key='36925888'
-uci set wireless.default_radio1.encryption='psk2'
-
-# 提交所有更改
-uci commit network
-uci commit wireless
-uci commit dhcp
-
-exit 0
-'''
-
-with open('openwrt/files/etc/uci-defaults/99-custom', 'w') as f:
-    f.write(config_content)
-"
+        # 使用Base64编码避免YAML解析问题
+        echo IyEvYmluL3NoCiMg5a6e5pS255qE5Yid5aeR5YyW6K6/6ZeuCiMgTEFOIOiuv+e9rgp1Y2kgc2V0IG5ldHdvcmsubGFuLmlwYWRkcj0nMTkyLjE2OC42LjEnCnVjaSBzZXQgbmV0d29yay5sYW4ubmV0bWFzaz0nMjU1LjI1NS4yNTUuMCcKCiMgUFBQb0Ug6L+r6L2v6K6/6ZeuCnVjaSBkZWxldGUgbmV0d29yay53YW4gMj4vZGV2L251bGwgfHwgdHJ1ZQp1Y2kgc2V0IG5ldHdvcmsud2FuPWludGVyZmFjZQp1Y2kgc2V0IG5ldHdvcmsud2FuLnByb3RvPSdwcHBvZScKdWNpIHNldCBuZXR3b3JrLndhbi51c2VybmFtZT0nMTU4Mjg4NjA5NzAnCnVjaSBzZXQgbmV0d29yay53YW4ucGFzc3dvcmQ9JzE0NzI1OCcKdWNpIHNldCBuZXR3b3JrLndhbi5pcHY2PSdhdXRvJwoKIyBJUHY2IOiuv+e9rgp1Y2kgc2V0IGRoY3AubGFuLmRoY3B2Nj0nc2VydmVyJwp1Y2kgc2V0IGRoY3AubGFuLnJhPSdzZXJ2ZXInCnVjaSBzZXQgZGhjcC5sYW4ucmFfbWFuYWdlbWVudD0nMScKCiMgMi40R0h6IFdpRmkg6K6/6ZeuCnVjaSBzZXQgd2lyZWxlc3MucmFkaW8wLmNoYW5uZWw9J2F1dG8nCnVjaSBzZXQgd2lyZWxlc3MucmFkaW8wLmh0bW9kZT0nSEU0MCcKdWNpIHNldCB3aXJlbGVzcy5kZWZhdWx0X3JhZGlvMC5zc2lkPSdsb2N1c3QnCnVjaSBzZXQgd2lyZWxlc3MuZGVmYXVsdF9yYWRpbzAua2V5PSczNjkyNTg4OCcKdWNpIHNldCB3aXJlbGVzcy5kZWZhdWx0X3JhZGlvMC5lbmNyeXB0aW9uPSdwc2syJwoKIyA1R0h6IFdpRmkg6K6/6ZeuCnVjaSBzZXQgd2lyZWxlc3MucmFkaW8xLmNoYW5uZWw9J2F1dG8nCnVjaSBzZXQgd2lyZWxlc3MucmFkaW8xLmh0bW9kZT0nSEUxNjAnCnVjaSBzZXQgd2lyZWxlc3MuZGVmYXVsdF9yYWRpbzEuc3NpZD0nbG9jdXN0LTVHJwp1Y2kgc2V0IHdpcmVsZXNzLmRlZmF1bHRfcmFkaW8xLmtleT0nMzY5MjU4ODgnCnVjaSBzZXQgd2lyZWxlc3MuZGVmYXVsdF9yYWRpbzEuZW5jcnlwdGlvbj0ncHNrMicKCiMg5L+d5a2Y5YWo6K6vdWNpIGNvbW1pdCBuZXR3b3JrCnVjaSBjb21taXQgd2lyZWxlc3MKdWNpIGNvbW1pdCBkaGNwCgpleGl0IDAK | base64 -d > openwrt/files/etc/uci-defaults/99-custom
         
         chmod +x openwrt/files/etc/uci-defaults/99-custom
-        echo "✅ 自定义配置文件创建完成"
+        echo "✅ 网络配置文件创建完成"
 
     - name: 下载编译依赖
       run: |
@@ -214,97 +121,63 @@ with open('openwrt/files/etc/uci-defaults/99-custom', 'w') as f:
           make dirclean
         fi
         
-        # 开始编译，尝试并行编译，失败时降级
-        make -j$(nproc) || make -j$(($(nproc)/2)) || make -j1 V=s
+        # 检查.config文件格式
+        echo "检查.config文件格式..."
+        if grep -n "^[[:space:]]" .config; then
+          echo "⚠️  发现行首空白，正在清理..."
+          sed -i 's/^[[:space:]]*//' .config
+        fi
+        
+        # 开始编译，逐步降级
+        echo "编译步骤1: 尝试并行编译..."
+        if make -j$(nproc); then
+          echo "✅ 并行编译成功"
+        else
+          echo "编译步骤2: 降级到一半核心..."
+          if make -j$(($(nproc)/2)); then
+            echo "✅ 降级编译成功"
+          else
+            echo "编译步骤3: 单线程详细输出..."
+            make -j1 V=s
+          fi
+        fi
         
         echo "编译完成！"
-        
-        # 检查编译结果
-        if find bin/targets -name "*.bin" -type f 2>/dev/null | grep -q .; then
-          echo "✅ 找到固件文件："
-          find bin/targets -name "*n60pro*.bin" -o -name "*cmcc*.bin" -type f 2>/dev/null | head -5
-        else
-          echo "⚠️ 未找到固件文件，检查目录结构："
-          find bin/targets -type f 2>/dev/null | head -10
-        fi
 
-    - name: 准备固件文件
-      id: prepare
+    - name: 查找固件文件
+      id: find-firmware
       run: |
-        echo "准备固件文件..."
-        
-        # 在编译输出目录中查找固件
         cd openwrt
+        echo "查找固件文件..."
         
-        # 查找固件文件的几种可能名称
-        FIRMWARE_FILE=$(find bin/targets -name "*cmcc_n60pro*sysupgrade.bin" -type f 2>/dev/null | head -1)
+        # 查找固件文件
+        FIRMWARE_PATH=$(find bin/targets -name "*cmcc_n60pro*sysupgrade.bin" -type f 2>/dev/null | head -1)
         
-        if [ -z "$FIRMWARE_FILE" ]; then
-          FIRMWARE_FILE=$(find bin/targets -name "*n60pro*.bin" -type f 2>/dev/null | head -1)
+        if [ -z "$FIRMWARE_PATH" ]; then
+          echo "尝试其他名称查找..."
+          FIRMWARE_PATH=$(find bin/targets -name "*n60pro*.bin" -type f 2>/dev/null | head -1)
         fi
         
-        if [ -z "$FIRMWARE_FILE" ]; then
-          # 如果没有找到特定名称，找任何sysupgrade.bin文件
-          FIRMWARE_FILE=$(find bin/targets -name "*sysupgrade.bin" -type f 2>/dev/null | head -1)
-        fi
-        
-        if [ -z "$FIRMWARE_FILE" ]; then
+        if [ -z "$FIRMWARE_PATH" ]; then
+          echo "列出所有固件文件:"
+          find bin/targets -name "*.bin" -type f 2>/dev/null | head -10
           echo "❌ 错误：未找到固件文件"
-          echo "编译输出目录内容："
-          ls -la bin/targets/ 2>/dev/null || true
           exit 1
         fi
         
-        echo "找到固件：$FIRMWARE_FILE"
+        echo "找到固件：$FIRMWARE_PATH"
         
         # 重命名固件
         FIRMWARE_NAME="immortalwrt-n60pro-highpower-$(date +%Y%m%d-%H%M).bin"
-        cp "$FIRMWARE_FILE" "/tmp/$FIRMWARE_NAME"
+        cp "$FIRMWARE_PATH" "/tmp/$FIRMWARE_NAME"
         
-        # 生成校验文件
-        cd /tmp
-        md5sum "$FIRMWARE_NAME" > "$FIRMWARE_NAME.md5"
-        sha256sum "$FIRMWARE_NAME" > "$FIRMWARE_NAME.sha256"
-        
-        # 创建固件信息文件
-        cat > firmware-info.txt << 'INFO_EOF'
-设备型号：CMCC N60 PRO
-固件名称：$FIRMWARE_NAME
-编译时间：$(date)
-源码版本：ImmortalWrt 24.10
-配置类型：高功率版本
-
-包含功能：
-- Argon 主题
-- OpenClash
-- iStore
-- PPPoE 拨号预配置
-- IPv6 自动启用
-
-默认配置：
-- 管理地址：192.168.6.1
-- WiFi 2.4G：locust (密码: 36925888)
-- WiFi 5G：locust-5G (密码: 36925888)
-- PPPoE账号：15828860970
-- PPPoE密码：147258
-
-刷机说明：
-1. 在原厂系统选择"系统升级"
-2. 上传本固件文件
-3. 等待重启完成（3-5分钟）
-4. 访问 http://192.168.6.1
-
-注意事项：
-- 仅适用于 CMCC N60 PRO 路由器
-- 刷机后建议立即修改密码
-- 首次启动可能需要较长时间初始化
-INFO_EOF
-        
-        # 输出变量供后续步骤使用
+        # 输出变量
         echo "firmware_name=$FIRMWARE_NAME" >> $GITHUB_OUTPUT
+        echo "firmware_path=/tmp/$FIRMWARE_NAME" >> $GITHUB_OUTPUT
         echo "✅ 固件准备完成"
 
     - name: 上传固件到仓库
+      if: success()
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -318,92 +191,87 @@ INFO_EOF
         mkdir -p firmware
         rm -rf firmware/*
         
-        # 复制固件及相关文件
+        # 复制固件文件
         cp /tmp/immortalwrt-n60pro-highpower-*.bin firmware/ 2>/dev/null || true
-        cp /tmp/*.md5 firmware/ 2>/dev/null || true
-        cp /tmp/*.sha256 firmware/ 2>/dev/null || true
-        cp /tmp/firmware-info.txt firmware/ 2>/dev/null || true
         
-        # 创建详细的 README
-        cat > firmware/README.md << 'README_EOF'
-# N60 PRO 高功率固件仓库
-
-此目录包含为 **CMCC N60 PRO** 路由器编译的 ImmortalWrt 高功率固件。
-
-## 最新固件
-**文件名**: `immortalwrt-n60pro-highpower-YYYYMMDD-HHMM.bin`
-**编译时间**: 每次手动触发工作流时更新
-**源码版本**: ImmortalWrt 24.10
-**无线配置**: 高功率版本
-
-## 内置功能
-- ✅ **Argon** 现代化主题
-- ✅ **OpenClash** 代理工具
-- ✅ **iStore** 软件中心
-- ✅ **PPPoE** 拨号预配置
-- ✅ **IPv6** 自动启用
-- ❌ AdBlock (已移除)
-- ❌ Docker (已移除)
-
-## 默认网络配置
-| 项目 | 配置值 |
-|------|--------|
-| 管理地址 | 192.168.6.1 |
-| WiFi 2.4G | SSID: `locust`, 密码: `36925888` |
-| WiFi 5G | SSID: `locust-5G`, 密码: `36925888` |
-| PPPoE账号 | 15828860970 |
-| PPPoE密码 | 147258 |
-
-## 刷机步骤
-1. **准备**: 下载最新的 `.bin` 文件到电脑
-2. **登录**: 访问路由器原厂管理界面
-3. **升级**: 进入"系统升级"页面
-4. **刷入**: 选择固件文件并上传刷入
-5. **等待**: 路由器自动重启（约3-5分钟）
-6. **访问**: 打开浏览器访问 http://192.168.6.1
-
-## 安全提醒
-⚠️ **重要**: 刷机后请立即：
-- 修改 PPPoE 密码（默认密码已内置在固件中）
-- 修改 WiFi 密码
-- 修改管理后台密码
-
-## 文件说明
-- `*.bin` - 主刷机固件文件
-- `*.md5` - MD5 校验文件
-- `*.sha256` - SHA256 校验文件
-- `firmware-info.txt` - 详细固件信息
-
-## 编译信息
-此固件由 GitHub Actions 自动编译，源码基于 [padavanonly/immortalwrt-mt798x](https://github.com/padavanonly/immortalwrt-mt798x) 仓库。
-
----
-**注意**: 仅适用于 **CMCC N60 PRO** 型号路由器，刷机有风险，请确保型号匹配！
-README_EOF
+        # 生成校验文件
+        cd firmware
+        for f in *.bin; do
+          if [ -f "$f" ]; then
+            md5sum "$f" > "$f.md5"
+            sha256sum "$f" > "$f.sha256"
+          fi
+        done
         
-        # 列出当前目录下的固件文件
-        echo "" >> firmware/README.md
-        echo "## 当前文件列表" >> firmware/README.md
-        echo "\`\`\`" >> firmware/README.md
-        ls -lh firmware/*.bin 2>/dev/null | head -10 >> firmware/README.md || echo "暂无固件文件" >> firmware/README.md
-        echo "\`\`\`" >> firmware/README.md
+        # 创建 README
+        cat > README.md << 'EOF'
+# N60 PRO 高功率固件
+
+## 固件信息
+- **设备**: CMCC N60 PRO
+- **源码**: ImmortalWrt 24.10
+- **配置**: 高功率版本
+- **编译时间**: $(date)
+
+## 包含功能
+- Argon 主题
+- OpenClash
+- iStore
+- PPPoE 预配置
+- IPv6 自动启用
+
+## 默认配置
+- 管理地址: 192.168.6.1
+- WiFi 2.4G: locust (密码: 36925888)
+- WiFi 5G: locust-5G (密码: 36925888)
+- PPPoE账号: 15828860970
+- PPPoE密码: 147258
+
+## 刷机说明
+1. 下载最新的 `.bin` 文件
+2. 访问路由器原厂管理界面
+3. 进入"系统升级"页面
+4. 上传固件文件
+5. 等待重启完成（约3-5分钟）
+6. 访问 http://192.168.6.1
+
+## 注意事项
+- 仅适用于 CMCC N60 PRO 路由器
+- 刷机后请立即修改密码
+- 首次启动可能需要较长时间初始化
+EOF
+        
+        # 列出文件
+        echo "" >> README.md
+        echo "## 文件列表" >> README.md
+        echo "\`\`\`" >> README.md
+        ls -lh *.bin 2>/dev/null | head -10 >> README.md || echo "暂无固件文件" >> README.md
+        echo "\`\`\`" >> README.md
         
         # 提交更改
-        git config user.name "GitHub Actions Bot"
+        cd ..
+        git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
         
         git add firmware/
-        git commit -m "📦 更新固件: $(date +'%Y年%m月%d日 %H:%M')"
+        git commit -m "更新固件: $(date +%Y%m%d-%H%M%S)"
         
-        # 尝试推送，如果失败可能是因为没有更改
-        git push origin main || echo "没有更改需要推送"
+        # 尝试推送
+        git push origin main || echo "推送失败或没有更改"
         
         echo "✅ 固件已上传到: https://github.com/ljzz/bianyi/tree/main/firmware"
-        echo "📥 直接下载链接: https://github.com/ljzz/bianyi/raw/main/firmware/${{ steps.prepare.outputs.firmware_name }}"
+        if [ -f "firmware/${{ steps.find-firmware.outputs.firmware_name }}" ]; then
+          echo "📥 直接下载: https://github.com/ljzz/bianyi/raw/main/firmware/${{ steps.find-firmware.outputs.firmware_name }}"
+        fi
 
-    - name: 清理临时文件
+    - name: 编译完成通知
       if: always()
       run: |
-        echo "清理临时文件..."
-        rm -rf /tmp/immortalwrt-* 2>/dev/null || true
-        echo "✅ 清理完成"
+        if [ "${{ job.status }}" = "success" ]; then
+          echo "🎉 编译成功！"
+          echo "固件已上传到你的仓库"
+          echo "访问: https://github.com/ljzz/bianyi/tree/main/firmware"
+        else
+          echo "❌ 编译失败"
+          echo "请检查编译日志中的错误信息"
+        fi
