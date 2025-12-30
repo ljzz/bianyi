@@ -1,10 +1,10 @@
-name: 编译 N60 PRO 固件
+name: Compile N60 PRO Firmware
 
 on:
   workflow_dispatch:
     inputs:
       clean_build:
-        description: '清理编译（推荐保持默认 false）'
+        description: 'Clean build (recommended false)'
         required: false
         default: false
         type: boolean
@@ -20,72 +20,72 @@ jobs:
     timeout-minutes: 180
 
     steps:
-    - name: 检查源码仓库
+    - name: Check source repository
       uses: actions/checkout@v4
 
-    - name: 准备编译环境
+    - name: Prepare build environment
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential clang flex bison g++ gawk \
           gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
           python3 python3-distutils rsync unzip zlib1g-dev file wget curl
 
-    - name: 克隆 ImmortalWrt 源码
+    - name: Clone ImmortalWrt source
       run: |
-        echo "正在克隆 ImmortalWrt 源码..."
+        echo "Cloning ImmortalWrt source..."
         git clone --depth 1 --branch main $SOURCE_URL openwrt-build
         cd openwrt-build
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 应用高功率配置
+    - name: Apply high power config
       run: |
         cd openwrt-build
-        echo "下载高功率配置文件..."
+        echo "Downloading high power config..."
         wget -q -O .config "$HIGH_POWER_CONFIG"
         
-        # 确保选择正确的设备
+        # Ensure correct device is selected
         echo "CONFIG_TARGET_MEDIATEK_FILOGIC=y" >> .config
         echo "CONFIG_TARGET_MEDIATEK_FILOGIC_DEVICE_CMCC_N60_PRO=y" >> .config
         
-        echo "应用基础配置..."
+        echo "Applying base config..."
         make defconfig
 
-    - name: 配置软件包
+    - name: Configure packages
       run: |
         cd openwrt-build
-        echo "配置软件包..."
+        echo "Configuring packages..."
         
-        # 添加必要软件包
+        # Add required packages
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-istore=y" >> .config
         
-        # OpenClash 依赖
+        # OpenClash dependencies
         echo "CONFIG_PACKAGE_bash=y" >> .config
         echo "CONFIG_PACKAGE_coreutils-nohup=y" >> .config
         echo "CONFIG_PACKAGE_curl=y" >> .config
         
-        # 移除不需要的软件包
+        # Remove unwanted packages
         echo "CONFIG_PACKAGE_luci-app-adblock=n" >> .config
         echo "CONFIG_PACKAGE_luci-app-docker=n" >> .config
         
-        # 更新配置
+        # Update config
         make defconfig
 
-    - name: 创建默认配置文件
+    - name: Create default config files
       run: |
-        echo "创建默认配置文件..."
+        echo "Creating default config files..."
         mkdir -p openwrt-build/files/etc/uci-defaults
         
         cat > openwrt-build/files/etc/uci-defaults/99-custom << 'EOF'
 #!/bin/sh
 
-# LAN 设置
+# LAN settings
 uci set network.lan.ipaddr='192.168.6.1'
 uci set network.lan.netmask='255.255.255.0'
 
-# PPPoE 设置
+# PPPoE settings
 uci delete network.wan 2>/dev/null || true
 uci set network.wan=interface
 uci set network.wan.proto='pppoe'
@@ -93,7 +93,7 @@ uci set network.wan.username='15828860970'
 uci set network.wan.password='147258'
 uci set network.wan.ipv6='auto'
 
-# IPv6 设置
+# IPv6 settings
 uci set dhcp.lan.dhcpv6='server'
 uci set dhcp.lan.ra='server'
 
@@ -113,187 +113,187 @@ EOF
         
         chmod +x openwrt-build/files/etc/uci-defaults/99-custom
 
-    - name: 下载依赖包
+    - name: Download dependencies
       run: |
         cd openwrt-build
-        echo "下载依赖包..."
+        echo "Downloading dependencies..."
         make download -j$(nproc) || make download -j1
 
-    - name: 编译固件
+    - name: Compile firmware
       run: |
         cd openwrt-build
         
-        # 检查是否执行清理编译
+        # Check if clean build is requested
         CLEAN_BUILD="${{ github.event.inputs.clean_build }}"
         if [ "$CLEAN_BUILD" = "true" ]; then
-          echo "执行清理编译..."
+          echo "Performing clean build..."
           make clean
         fi
         
-        echo "开始编译..."
-        # 尝试并行编译
+        echo "Starting compilation..."
+        # Try parallel compilation, fallback to single thread if needed
         make -j$(nproc) || make -j1 V=s
         
-        echo "编译完成！查找固件..."
+        echo "Compilation complete! Looking for firmware..."
 
-    - name: 准备固件文件
+    - name: Prepare firmware files
       id: prepare-firmware
       run: |
-        echo "准备固件文件..."
+        echo "Preparing firmware files..."
         
-        # 查找固件文件
+        # Find firmware file
         cd openwrt-build
         
-        # 查找固件文件（尝试多种可能路径）
+        # Try multiple paths
         FIRMWARE_PATH=$(find bin/targets/mediatek/filogic -name "*cmcc_n60pro*sysupgrade.bin" -type f 2>/dev/null | head -1)
         
         if [ -z "$FIRMWARE_PATH" ]; then
-          echo "尝试其他路径查找..."
+          echo "Trying other paths..."
           FIRMWARE_PATH=$(find . -name "*n60pro*.bin" -type f | head -1)
         fi
         
         if [ -z "$FIRMWARE_PATH" ]; then
-          echo "错误：未找到固件文件！"
-          echo "当前目录结构："
+          echo "ERROR: No firmware file found!"
+          echo "Current directory structure:"
           find bin/targets/ -name "*.bin" -type f 2>/dev/null | head -20
           exit 1
         fi
         
-        echo "找到固件：$FIRMWARE_PATH"
+        echo "Found firmware: $FIRMWARE_PATH"
         
-        # 重命名固件
+        # Rename firmware
         FIRMWARE_NAME="immortalwrt-n60pro-highpower-$(date +%Y%m%d-%H%M).bin"
         cp "$FIRMWARE_PATH" "/tmp/$FIRMWARE_NAME"
         
-        # 生成校验文件
+        # Generate checksums
         cd /tmp
         md5sum "$FIRMWARE_NAME" > "$FIRMWARE_NAME.md5"
         sha256sum "$FIRMWARE_NAME" > "$FIRMWARE_NAME.sha256"
         
-        # 创建固件信息文件
+        # Create firmware info file
         cat > firmware-info.txt << 'EOF'
-设备型号：CMCC N60 PRO
-编译时间：$(date)
-源码版本：ImmortalWrt 24.10
-配置类型：高功率版本
+Device: CMCC N60 PRO
+Compile time: $(date)
+Source: ImmortalWrt 24.10
+Config: High power version
 
-包含功能：
-- Argon 主题
+Features:
+- Argon theme
 - OpenClash
 - iStore
-- PPPoE 拨号预配置
-- IPv6 自动启用
+- PPPoE pre-configured
+- IPv6 auto-enabled
 
-默认配置：
-- 管理地址：192.168.6.1
-- WiFi 2.4G：locust
-- WiFi 5G：locust-5G
-- WiFi 密码：36925888
-- PPPoE账号：15828860970
-- PPPoE密码：147258
+Default config:
+- Admin address: 192.168.6.1
+- WiFi 2.4G: locust
+- WiFi 5G: locust-5G
+- WiFi password: 36925888
+- PPPoE username: 15828860970
+- PPPoE password: 147258
 
-刷机说明：
-1. 在原厂系统选择"系统升级"
-2. 上传本固件文件
-3. 等待重启完成（3-5分钟）
-4. 访问 http://192.168.6.1
+Flash instructions:
+1. Go to system upgrade in original firmware
+2. Upload this firmware file
+3. Wait for reboot (3-5 minutes)
+4. Access http://192.168.6.1
 
-注意：仅适用于 CMCC N60 PRO 路由器
+Note: Only for CMCC N60 PRO router
 EOF
         
-        echo "固件大小：$(du -h /tmp/$FIRMWARE_NAME | cut -f1)"
-        echo "固件MD5：$(md5sum /tmp/$FIRMWARE_NAME | cut -d' ' -f1)"
+        echo "Firmware size: $(du -h /tmp/$FIRMWARE_NAME | cut -f1)"
+        echo "Firmware MD5: $(md5sum /tmp/$FIRMWARE_NAME | cut -d' ' -f1)"
         
-        # 设置输出变量
+        # Set output variable
         echo "firmware_name=$FIRMWARE_NAME" >> $GITHUB_OUTPUT
 
-    - name: 上传固件到仓库
+    - name: Upload firmware to repository
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "上传固件到 ljzz/bianyi 仓库..."
+        echo "Uploading firmware to ljzz/bianyi repository..."
         
-        # 克隆目标仓库
+        # Clone target repository
         git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/ljzz/bianyi.git firmware-repo
         cd firmware-repo
         
-        # 创建或清空 firmware 目录
+        # Create or clean firmware directory
         mkdir -p firmware
         rm -rf firmware/*
         
-        # 复制固件文件
+        # Copy firmware files
         cp /tmp/immortalwrt-n60pro-highpower-*.bin firmware/
         cp /tmp/*.md5 firmware/ 2>/dev/null || true
         cp /tmp/*.sha256 firmware/ 2>/dev/null || true
         cp /tmp/firmware-info.txt firmware/
         
-        # 创建 README
+        # Create README
         cat > firmware/README.md << 'EOF'
-# N60 PRO 固件仓库
+# N60 PRO Firmware Repository
 
-这是为 CMCC N60 PRO 路由器编译的 ImmortalWrt 高功率固件。
+This contains high power ImmortalWrt firmware for CMCC N60 PRO router.
 
-## 最新固件
-- **文件**：`immortalwrt-n60pro-highpower-YYYYMMDD-HHMM.bin`
-- **编译时间**：每次手动触发编译时更新
-- **包含插件**：Argon 主题、OpenClash、iStore
-- **默认配置**：已预配置 PPPoE、WiFi、管理地址
+## Latest Firmware
+- **File**: `immortalwrt-n60pro-highpower-YYYYMMDD-HHMM.bin`
+- **Compile time**: Updated on each manual trigger
+- **Included**: Argon theme, OpenClash, iStore
+- **Pre-configured**: PPPoE, WiFi, admin address
 
-## 文件说明
-- `*.bin` - 固件刷机文件
-- `*.md5` - MD5 校验文件
-- `*.sha256` - SHA256 校验文件
-- `firmware-info.txt` - 详细固件信息
+## File Description
+- `*.bin` - Firmware flash file
+- `*.md5` - MD5 checksum file
+- `*.sha256` - SHA256 checksum file
+- `firmware-info.txt` - Detailed firmware info
 
-## 刷机步骤
-1. 下载最新的 `.bin` 文件
-2. 登录路由器原厂管理界面
-3. 进入"系统升级"页面
-4. 选择下载的固件上传刷入
-5. 等待路由器重启（3-5分钟）
-6. 访问 http://192.168.6.1
+## Flash Instructions
+1. Download the latest `.bin` file
+2. Login to router original admin interface
+3. Go to "System Upgrade" page
+4. Select and upload the firmware file
+5. Wait for router reboot (3-5 minutes)
+6. Access http://192.168.6.1
 
-## 默认配置
-- 管理地址：192.168.6.1
-- WiFi 2.4G：locust (密码: 36925888)
-- WiFi 5G：locust-5G (密码: 36925888)
-- PPPoE：已预配置账号密码
+## Default Configuration
+- Admin address: 192.168.6.1
+- WiFi 2.4G: locust (password: 36925888)
+- WiFi 5G: locust-5G (password: 36925888)
+- PPPoE: Pre-configured account/password
 
-**注意**：刷机后建议立即修改 PPPoE 密码和 WiFi 密码！
+**Note**: Change PPPoE password and WiFi password after flashing!
 
-## 历史版本
-历史版本文件会保留在此目录中，可按需下载旧版本。
+## Previous Versions
+Previous versions are kept in this directory for reference.
 EOF
         
-        # 列出所有固件文件
+        # List all firmware files
         echo "" >> firmware/README.md
-        echo "## 文件列表" >> firmware/README.md
+        echo "## File List" >> firmware/README.md
         echo '```' >> firmware/README.md
         ls -la firmware/*.bin 2>/dev/null | head -20 >> firmware/README.md
         echo '```' >> firmware/README.md
         
-        # 提交更改
+        # Commit changes
         git config user.name "GitHub Actions Bot"
         git config user.email "actions@github.com"
         
         git add firmware/
-        git commit -m "更新固件: $(date +%Y%m%d-%H%M%S)"
+        git commit -m "Update firmware: $(date +%Y%m%d-%H%M%S)"
         git push origin main
         
-        echo "✅ 固件已成功上传到 https://github.com/ljzz/bianyi/tree/main/firmware"
+        echo "✅ Firmware uploaded to https://github.com/ljzz/bianyi/tree/main/firmware"
 
-    - name: 输出结果信息
+    - name: Output result info
       if: success()
       run: |
-        echo "🎉 编译完成！"
+        echo "🎉 Compilation complete!"
         echo ""
-        echo "固件下载地址："
+        echo "Firmware download URL:"
         echo "https://github.com/ljzz/bianyi/raw/main/firmware/immortalwrt-n60pro-highpower-$(date +%Y%m%d-%H%M).bin"
         echo ""
-        echo "查看所有文件："
+        echo "View all files:"
         echo "https://github.com/ljzz/bianyi/tree/main/firmware"
         echo ""
-        echo "下次编译："
-        echo "1. 访问 https://github.com/ljzz/bianyi/actions"
-        echo "2. 点击『编译 N60 PRO 固件』"
-        echo "3. 点击『Run workflow』"
+        echo "Next compilation:"
+        echo "1. Visit https://github.com/ljzz/bianyi/actions"
+        echo "2. Click 'Compile N60 PRO Firmware'"
+        echo "3. Click 'Run workflow'"
