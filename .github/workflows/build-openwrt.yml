@@ -22,8 +22,6 @@ jobs:
     steps:
     - name: 检查源码仓库
       uses: actions/checkout@v4
-      with:
-        path: source-repo
 
     - name: 准备编译环境
       run: |
@@ -125,7 +123,9 @@ EOF
       run: |
         cd openwrt-build
         
-        if ${{ github.event.inputs.clean_build }}; then
+        # 检查是否执行清理编译
+        CLEAN_BUILD="${{ github.event.inputs.clean_build }}"
+        if [ "$CLEAN_BUILD" = "true" ]; then
           echo "执行清理编译..."
           make clean
         fi
@@ -173,7 +173,6 @@ EOF
         # 创建固件信息文件
         cat > firmware-info.txt << 'EOF'
 设备型号：CMCC N60 PRO
-固件名称：$(echo $FIRMWARE_NAME)
 编译时间：$(date)
 源码版本：ImmortalWrt 24.10
 配置类型：高功率版本
