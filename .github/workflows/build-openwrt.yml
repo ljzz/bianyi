@@ -1,4 +1,4 @@
-name: build-openwrt.yml
+name: build-openwrt
 
 on:
   workflow_dispatch:
