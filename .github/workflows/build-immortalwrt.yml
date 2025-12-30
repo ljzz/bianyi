@@ -26,10 +26,11 @@ env:
   # 基础配置
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
   REPO_BRANCH: openwrt-24.10-6.6
-  FEEDS_CONF: feeds.conf.default
   
   # 高功率配置文件
-  HIGH_POWER_CONFIG_URL:https://github.com/padavanonly/immortalwrt-mt798x-6.6/blob/2410/defconfig/nx60pro-ipailna-high-power.config
+  HIGH_POWER_CONFIG_URL: https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
+  
+  # 功能配置
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   FIRMWARE_TAG: padavanonly-237-mt798x-6.6
@@ -49,7 +50,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v3
 
     - name: Initialization environment
       env:
@@ -72,38 +73,22 @@ jobs:
         git clone -b $REPO_BRANCH --single-branch --filter=blob:none $REPO_URL openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: Load custom feeds
-      run: |
-        if [ -e "$FEEDS_CONF" ]; then
-          mv "$FEEDS_CONF" openwrt/feeds.conf.default
-        fi
-        
-        # 创建自定义 feeds 配置（如果没有的话）
-        if [ ! -f openwrt/feeds.conf.default ]; then
-          cat > openwrt/feeds.conf.default << 'EOF'
-src-git packages https://github.com/immortalwrt/packages.git;openwrt-24.10
-src-git luci https://github.com/immortalwrt/luci.git;openwrt-24.10
-src-git routing https://github.com/openwrt/routing.git;openwrt-24.10
-src-git telephony https://github.com/openwrt/telephony.git;openwrt-24.10
-EOF
-        fi
-
     - name: Download high power configuration
       run: |
-        cd openwrt
+        cd /workdir/openwrt
         echo "下载高功率配置文件..."
         wget "$HIGH_POWER_CONFIG_URL" -O .config
         echo "高功率配置文件下载完成"
 
     - name: Update and install feeds
       run: |
-        cd openwrt
+        cd /workdir/openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
     - name: Install custom packages
       run: |
-        cd openwrt
+        cd /workdir/openwrt
         
         # 安装 Argon 主题
         echo "安装 Argon 主题..."
@@ -119,7 +104,7 @@ EOF
 
     - name: Apply custom configurations
       run: |
-        cd openwrt
+        cd /workdir/openwrt
         
         # 启用 Argon 主题
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
@@ -134,6 +119,10 @@ EOF
         echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
         
         # 禁用不需要的包
+        sed -i '/CONFIG_PACKAGE_luci-app-adblock/d' .config
+        sed -i '/CONFIG_PACKAGE_luci-app-docker/d' .config
+        sed -i '/CONFIG_PACKAGE_docker/d' .config
+        sed -i '/CONFIG_PACKAGE_dockerd/d' .config
         echo "# CONFIG_PACKAGE_luci-app-adblock is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-docker is not set" >> .config
         echo "# CONFIG_PACKAGE_docker is not set" >> .config
@@ -141,7 +130,7 @@ EOF
 
     - name: Generate custom files
       run: |
-        cd openwrt
+        cd /workdir/openwrt
         
         # 创建自定义文件目录结构
         mkdir -p files/etc/config
@@ -149,7 +138,7 @@ EOF
         mkdir -p files/etc/wireless
         
         # 1. 网络配置文件
-        cat > files/etc/config/network << EOF
+        cat > files/etc/config/network << 'EOF'
 config interface 'loopback'
         option device 'lo'
         option proto 'static'
@@ -167,15 +156,15 @@ config device
 config interface 'lan'
         option device 'br-lan'
         option proto 'static'
-        option ipaddr '${LAN_IP}'
+        option ipaddr '${{ env.LAN_IP }}'
         option netmask '255.255.255.0'
         option ip6assign '60'
 
 config interface 'wan'
         option device 'eth1'
         option proto 'pppoe'
-        option username '${PPPOE_USERNAME}'
-        option password '${PPPOE_PASSWORD}'
+        option username '${{ env.PPPOE_USERNAME }}'
+        option password '${{ env.PPPOE_PASSWORD }}'
         option ipv6 'auto'
 
 config interface 'wan6'
@@ -184,7 +173,7 @@ config interface 'wan6'
 EOF
 
         # 2. 无线配置文件
-        cat > files/etc/config/wireless << EOF
+        cat > files/etc/config/wireless << 'EOF'
 config wifi-device 'radio0'
         option type 'mac80211'
         option path 'platform/18000000.wbsys'
@@ -197,9 +186,9 @@ config wifi-iface 'default_radio0'
         option device 'radio0'
         option network 'lan'
         option mode 'ap'
-        option ssid '${WIFI_SSID_5G}'
+        option ssid '${{ env.WIFI_SSID_5G }}'
         option encryption 'psk2'
-        option key '${WIFI_PASSWORD}'
+        option key '${{ env.WIFI_PASSWORD }}'
         option disabled '0'
 
 config wifi-device 'radio1'
@@ -214,14 +203,14 @@ config wifi-iface 'default_radio1'
         option device 'radio1'
         option network 'lan'
         option mode 'ap'
-        option ssid '${WIFI_SSID}'
+        option ssid '${{ env.WIFI_SSID }}'
         option encryption 'psk2'
-        option key '${WIFI_PASSWORD}'
+        option key '${{ env.WIFI_PASSWORD }}'
         option disabled '0'
 EOF
 
         # 3. 系统配置文件
-        cat > files/etc/config/system << EOF
+        cat > files/etc/config/system << 'EOF'
 config system
         option hostname 'ImmortalWrt'
         option timezone 'CST-8'
@@ -259,13 +248,13 @@ EOF
 
     - name: Finalize configuration
       run: |
-        cd openwrt
+        cd /workdir/openwrt
         make defconfig
 
     - name: Download packages
       id: package
       run: |
-        cd openwrt
+        cd /workdir/openwrt
         make download -j$(nproc)
         
         # 检查并清理无效的下载文件
@@ -277,10 +266,10 @@ EOF
     - name: Compile the firmware
       id: compile
       run: |
-        cd openwrt
+        cd /workdir/openwrt
         
         # 如果需要清理构建
-        if [ "${{ inputs.clean_build || 'false' }}" = "true" ]; then
+        if [[ "${{ github.event.inputs.clean_build }}" == "true" ]]; then
           echo "执行清理构建..."
           make clean
         fi
@@ -320,7 +309,7 @@ EOF
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outputs.status == 'success' && !cancelled()
       run: |
-        cd openwrt/bin/targets/*/*
+        cd /workdir/openwrt/bin/targets/*/*
         echo "整理固件文件..."
         
         # 删除 packages 目录，只保留固件
@@ -342,18 +331,18 @@ EOF
           echo "- IPv6 完整支持" >> firmware-info.txt
           echo "" >> firmware-info.txt
           echo "网络配置:" >> firmware-info.txt
-          echo "管理地址: $LAN_IP" >> firmware-info.txt
-          echo "2.4G WiFi: $WIFI_SSID" >> firmware-info.txt
-          echo "5G WiFi: $WIFI_SSID_5G" >> firmware-info.txt
-          echo "WiFi密码: $WIFI_PASSWORD" >> firmware-info.txt
-          echo "PPPoE账号: $PPPOE_USERNAME" >> firmware-info.txt
+          echo "管理地址: ${{ env.LAN_IP }}" >> firmware-info.txt
+          echo "2.4G WiFi: ${{ env.WIFI_SSID }}" >> firmware-info.txt
+          echo "5G WiFi: ${{ env.WIFI_SSID_5G }}" >> firmware-info.txt
+          echo "WiFi密码: ${{ env.WIFI_PASSWORD }}" >> firmware-info.txt
+          echo "PPPoE账号: ${{ env.PPPOE_USERNAME }}" >> firmware-info.txt
         fi
         
         echo "FIRMWARE_PATH=$(pwd)" >> $GITHUB_ENV
         echo "整理完成"
 
     - name: Upload firmware as artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v3
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
