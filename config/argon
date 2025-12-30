@@ -1,0 +1,4 @@
+config global
+    option blur '1'
+    option shadow '1'
+    option transparency '1'
