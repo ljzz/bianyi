@@ -131,8 +131,8 @@ EOF
         mkdir -p files/etc/config
         mkdir -p files/etc/uci-defaults
         
-        # 网络配置
-        cat > files/etc/config/network << 'EOF'
+        # 网络配置文件
+        cat << 'EOF' > files/etc/config/network
 config interface 'loopback'
     option device 'lo'
     option proto 'static'
@@ -173,8 +173,8 @@ config interface 'wan6'
     option reqprefix 'auto'
 EOF
         
-        # 无线配置
-        cat > files/etc/config/wireless << 'EOF'
+        # 无线配置文件
+        cat << 'EOF' > files/etc/config/wireless
 config wifi-device 'radio0'
     option type 'mac80211'
     option channel 'auto'
@@ -214,8 +214,8 @@ config wifi-iface 'default_radio1'
     option wpa_disable_eapol_key_retries '1'
 EOF
         
-        # 系统配置
-        cat > files/etc/config/system << 'EOF'
+        # 系统配置文件
+        cat << 'EOF' > files/etc/config/system
 config system
     option hostname 'locust-router'
     option timezone 'CST-8'
@@ -228,8 +228,8 @@ config timeserver 'ntp'
     list server 'cn.ntp.org.cn'
 EOF
         
-        # DHCP配置
-        cat > files/etc/config/dhcp << 'EOF'
+        # DHCP配置文件
+        cat << 'EOF' > files/etc/config/dhcp
 config dnsmasq
     option domainneeded '1'
     option boguspriv '1'
@@ -269,7 +269,7 @@ config dhcp 'wan'
 EOF
         
         # 启动脚本
-        cat > files/etc/uci-defaults/99-custom-config << 'EOF'
+        cat << 'EOF' > files/etc/uci-defaults/99-custom-config
 #!/bin/sh
 uci set luci.main.mediaurlbase='/luci-static/argon'
 uci commit luci
@@ -341,7 +341,7 @@ EOF
         rm -rf packages
         rm -rf *.buildinfo *.manifest
         
-        cat > README.md << 'EOF'
+        cat << 'EOF' > README.md
 # OpenWrt 固件说明
 
 ## 固件信息
@@ -373,7 +373,7 @@ EOF
 ## 注意事项
 1. 首次登录请修改默认密码
 2. 建议修改PPPoE密码确保安全
-3. 如需重置配置，可执行 `firstboot` 命令
+3. 如需重置配置，可执行 \`firstboot\` 命令
 
 ## 文件列表
 EOF
