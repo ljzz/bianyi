@@ -1,0 +1,4 @@
+config system
+    option hostname 'N60Pro'
+    option timezone 'CST-8'
+    option zonename 'Asia/Shanghai'
