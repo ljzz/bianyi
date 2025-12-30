@@ -68,114 +68,122 @@ jobs:
         mkdir -p files/etc/config
         mkdir -p files/etc/uci-defaults
         
-        # 创建网络配置文件 - 避免使用heredoc语法
-        echo "config interface 'loopback'" > files/etc/config/network
-        echo "    option device 'lo'" >> files/etc/config/network
-        echo "    option proto 'static'" >> files/etc/config/network
-        echo "    option ipaddr '127.0.0.1'" >> files/etc/config/network
-        echo "    option netmask '255.0.0.0'" >> files/etc/config/network
-        echo "" >> files/etc/config/network
-        echo "config globals 'globals'" >> files/etc/config/network
-        echo "    option ula_prefix 'fd10:db8:1234::/48'" >> files/etc/config/network
-        echo "" >> files/etc/config/network
-        echo "config device" >> files/etc/config/network
-        echo "    option name 'br-lan'" >> files/etc/config/network
-        echo "    option type 'bridge'" >> files/etc/config/network
-        echo "    list ports 'eth0'" >> files/etc/config/network
-        echo "" >> files/etc/config/network
-        echo "config interface 'lan'" >> files/etc/config/network
-        echo "    option device 'br-lan'" >> files/etc/config/network
-        echo "    option proto 'static'" >> files/etc/config/network
-        echo "    option ipaddr '192.168.6.1'" >> files/etc/config/network
-        echo "    option netmask '255.255.255.0'" >> files/etc/config/network
-        echo "    option ip6assign '60'" >> files/etc/config/network
-        echo "" >> files/etc/config/network
-        echo "config interface 'wan'" >> files/etc/config/network
-        echo "    option device 'eth1'" >> files/etc/config/network
-        echo "    option proto 'pppoe'" >> files/etc/config/network
-        echo "    option username '15828860970'" >> files/etc/config/network
-        echo "    option password '147258'" >> files/etc/config/network
-        echo "    option ipv6 'auto'" >> files/etc/config/network
+        # 创建网络配置文件
+        cat > files/etc/config/network << 'EOF'
+config interface 'loopback'
+    option device 'lo'
+    option proto 'static'
+    option ipaddr '127.0.0.1'
+    option netmask '255.0.0.0'
 
+config globals 'globals'
+    option ula_prefix 'fd10:db8:1234::/48'
+
+config device
+    option name 'br-lan'
+    option type 'bridge'
+    list ports 'eth0'
+
+config interface 'lan'
+    option device 'br-lan'
+    option proto 'static'
+    option ipaddr '192.168.6.1'
+    option netmask '255.255.255.0'
+    option ip6assign '60'
+
+config interface 'wan'
+    option device 'eth1'
+    option proto 'pppoe'
+    option username '15828860970'
+    option password '147258'
+    option ipv6 'auto'
+EOF
+        
         # 创建无线配置文件
-        echo "config wifi-device 'radio0'" > files/etc/config/wireless
-        echo "    option type 'mac80211'" >> files/etc/config/wireless
-        echo "    option path 'platform/18000000.wmac'" >> files/etc/config/wireless
-        echo "    option channel '36'" >> files/etc/config/wireless
-        echo "    option band '5g'" >> files/etc/config/wireless
-        echo "    option htmode 'HE80'" >> files/etc/config/wireless
-        echo "    option disabled '0'" >> files/etc/config/wireless
-        echo "" >> files/etc/config/wireless
-        echo "config wifi-iface 'default_radio0'" >> files/etc/config/wireless
-        echo "    option device 'radio0'" >> files/etc/config/wireless
-        echo "    option network 'lan'" >> files/etc/config/wireless
-        echo "    option mode 'ap'" >> files/etc/config/wireless
-        echo "    option ssid 'locust-5G'" >> files/etc/config/wireless
-        echo "    option encryption 'psk2'" >> files/etc/config/wireless
-        echo "    option key '36925888'" >> files/etc/config/wireless
-        echo "" >> files/etc/config/wireless
-        echo "config wifi-device 'radio1'" >> files/etc/config/wireless
-        echo "    option type 'mac80211'" >> files/etc/config/wireless
-        echo "    option path 'platform/18000000.wmac'" >> files/etc/config/wireless
-        echo "    option channel 'auto'" >> files/etc/config/wireless
-        echo "    option band '2g'" >> files/etc/config/wireless
-        echo "    option htmode 'HE20'" >> files/etc/config/wireless
-        echo "    option disabled '0'" >> files/etc/config/wireless
-        echo "" >> files/etc/config/wireless
-        echo "config wifi-iface 'default_radio1'" >> files/etc/config/wireless
-        echo "    option device 'radio1'" >> files/etc/config/wireless
-        echo "    option network 'lan'" >> files/etc/config/wireless
-        echo "    option mode 'ap'" >> files/etc/config/wireless
-        echo "    option ssid 'locust'" >> files/etc/config/wireless
-        echo "    option encryption 'psk2'" >> files/etc/config/wireless
-        echo "    option key '36925888'" >> files/etc/config/wireless
+        cat > files/etc/config/wireless << 'EOF'
+config wifi-device 'radio0'
+    option type 'mac80211'
+    option path 'platform/18000000.wmac'
+    option channel '36'
+    option band '5g'
+    option htmode 'HE80'
+    option disabled '0'
 
+config wifi-iface 'default_radio0'
+    option device 'radio0'
+    option network 'lan'
+    option mode 'ap'
+    option ssid 'locust-5G'
+    option encryption 'psk2'
+    option key '36925888'
+
+config wifi-device 'radio1'
+    option type 'mac80211'
+    option path 'platform/18000000.wmac'
+    option channel 'auto'
+    option band '2g'
+    option htmode 'HE20'
+    option disabled '0'
+
+config wifi-iface 'default_radio1'
+    option device 'radio1'
+    option network 'lan'
+    option mode 'ap'
+    option ssid 'locust'
+    option encryption 'psk2'
+    option key '36925888'
+EOF
+        
         # 创建系统配置文件
-        echo "config system" > files/etc/config/system
-        echo "    option hostname 'ImmortalWrt'" >> files/etc/config/system
-        echo "    option timezone 'CST-8'" >> files/etc/config/system
-        echo "    option zonename 'Asia/Shanghai'" >> files/etc/config/system
-        echo "" >> files/etc/config/system
-        echo "config timeserver 'ntp'" >> files/etc/config/system
-        echo "    list server 'ntp.aliyun.com'" >> files/etc/config/system
-        echo "    list server 'time1.cloud.tencent.com'" >> files/etc/config/system
-        echo "    list server 'cn.pool.ntp.org'" >> files/etc/config/system
-        echo "    option enabled '1'" >> files/etc/config/system
+        cat > files/etc/config/system << 'EOF'
+config system
+    option hostname 'ImmortalWrt'
+    option timezone 'CST-8'
+    option zonename 'Asia/Shanghai'
 
+config timeserver 'ntp'
+    list server 'ntp.aliyun.com'
+    list server 'time1.cloud.tencent.com'
+    list server 'cn.pool.ntp.org'
+    option enabled '1'
+EOF
+        
         # 创建防火墙配置文件
-        echo "config defaults" > files/etc/config/firewall
-        echo "    option syn_flood '1'" >> files/etc/config/firewall
-        echo "    option input 'ACCEPT'" >> files/etc/config/firewall
-        echo "    option output 'ACCEPT'" >> files/etc/config/firewall
-        echo "    option forward 'REJECT'" >> files/etc/config/firewall
-        echo "" >> files/etc/config/firewall
-        echo "config zone" >> files/etc/config/firewall
-        echo "    option name 'lan'" >> files/etc/config/firewall
-        echo "    option input 'ACCEPT'" >> files/etc/config/firewall
-        echo "    option output 'ACCEPT'" >> files/etc/config/firewall
-        echo "    option forward 'ACCEPT'" >> files/etc/config/firewall
-        echo "    option network 'lan'" >> files/etc/config/firewall
-        echo "" >> files/etc/config/firewall
-        echo "config zone" >> files/etc/config/firewall
-        echo "    option name 'wan'" >> files/etc/config/firewall
-        echo "    option input 'REJECT'" >> files/etc/config/firewall
-        echo "    option output 'ACCEPT'" >> files/etc/config/firewall
-        echo "    option forward 'REJECT'" >> files/etc/config/firewall
-        echo "    option masq '1'" >> files/etc/config/firewall
-        echo "    option mtu_fix '1'" >> files/etc/config/firewall
-        echo "    option network 'wan'" >> files/etc/config/firewall
-        echo "" >> files/etc/config/firewall
-        echo "config forwarding" >> files/etc/config/firewall
-        echo "    option src 'lan'" >> files/etc/config/firewall
-        echo "    option dest 'wan'" >> files/etc/config/firewall
+        cat > files/etc/config/firewall << 'EOF'
+config defaults
+    option syn_flood '1'
+    option input 'ACCEPT'
+    option output 'ACCEPT'
+    option forward 'REJECT'
 
+config zone
+    option name 'lan'
+    option input 'ACCEPT'
+    option output 'ACCEPT'
+    option forward 'ACCEPT'
+    option network 'lan'
+
+config zone
+    option name 'wan'
+    option input 'REJECT'
+    option output 'ACCEPT'
+    option forward 'REJECT'
+    option masq '1'
+    option mtu_fix '1'
+    option network 'wan'
+
+config forwarding
+    option src 'lan'
+    option dest 'wan'
+EOF
+        
         # 创建自定义配置脚本
         echo "#!/bin/sh" > files/etc/uci-defaults/99-custom-config
         echo "uci set luci.main.mediaurlbase='/luci-static/argon'" >> files/etc/uci-defaults/99-custom-config
         echo "uci commit luci" >> files/etc/uci-defaults/99-custom-config
         echo "exit 0" >> files/etc/uci-defaults/99-custom-config
         chmod +x files/etc/uci-defaults/99-custom-config
-
+        
         echo "自定义配置文件创建完成"
 
     - name: Build firmware
