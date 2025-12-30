@@ -1,447 +1,301 @@
-name: 编译 OpenWrt 固件
+name: 编译 N60 PRO 固件
 
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: '选择要编译的分支'
-        required: true
-        default: 'main'
-        type: choice
-        options:
-          - main
-          - openwrt-24.10
+      clean_build:
+        description: '清理编译（推荐保持默认 false）'
+        required: false
+        default: false
+        type: boolean
 
 env:
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
-  HIGH_POWER_CONFIG: https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
-  FIRMWARE_TAG: 237-high-power
-  TZ: Asia/Shanghai
+  REPO_URL: "https://github.com/ljzz/bianyi.git"
+  SOURCE_URL: "https://github.com/padavanonly/immortalwrt-mt798x-24.10"
+  HIGH_POWER_CONFIG: "https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-highpower.config"
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
-    
+  build-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
     steps:
-    - name: 检出仓库
+    - name: 检查源码仓库
       uses: actions/checkout@v4
-      
-    - name: 设置编译环境
-      env:
-        DEBIAN_FRONTEND: noninteractive
+      with:
+        path: source-repo
+
+    - name: 准备编译环境
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* \
-          /usr/share/dotnet \
-          /usr/local/lib/android \
-          /opt/ghc \
-          /opt/hostedtoolcache/CodeQL
-        
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install \
-          build-essential \
-          ccache \
-          clang \
-          cmake \
-          curl \
-          gawk \
-          gettext \
-          git \
-          libncurses5-dev \
-          libncursesw5-dev \
-          libssl-dev \
-          python3 \
-          python3-pip \
-          python3-setuptools \
-          rsync \
-          subversion \
-          swig \
-          unzip \
-          wget \
-          zlib1g-dev \
-          file \
-          time \
-          gperf \
-          p7zip-full \
-          libelf-dev \
-          libxml-parser-perl \
-          gcc-multilib \
-          flex \
-          bison
-        
-        sudo timedatectl set-timezone "$TZ"
-        echo "编译环境设置完成"
-    
-    - name: 克隆 OpenWrt 源码
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang flex bison g++ gawk \
+          gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
+          python3 python3-distutils rsync unzip zlib1g-dev file wget curl
+
+    - name: 克隆 ImmortalWrt 源码
       run: |
-        echo "选择的分支: ${{ github.event.inputs.branch }}"
-        git clone --depth 1 -b ${{ github.event.inputs.branch }} ${{ env.REPO_URL }} openwrt
-        cd openwrt
-        echo "源码克隆完成"
-    
-    - name: 下载高功率配置
-      run: |
-        cd openwrt
-        curl -L -o .config ${{ env.HIGH_POWER_CONFIG }}
-        echo "高功率配置文件下载完成"
-    
-    - name: 设置软件源
-      working-directory: openwrt
-      run: |
-        cat > feeds.conf.default << 'EOF'
-src-git-full packages https://git.openwrt.org/feed/packages.git;openwrt-24.10
-src-git-full luci https://git.openwrt.org/project/luci.git;openwrt-24.10
-src-git-full routing https://git.openwrt.org/feed/routing.git;openwrt-24.10
-src-git-full telephony https://git.openwrt.org/feed/telephony.git;openwrt-24.10
-src-git istore https://github.com/linkease/istore;main
-src-git openclash https://github.com/vernesong/OpenClash.git;master
-src-git argon https://github.com/jerrykuku/luci-theme-argon.git;master
-EOF
-        
+        echo "正在克隆 ImmortalWrt 源码..."
+        git clone --depth 1 --branch main $SOURCE_URL openwrt-build
+        cd openwrt-build
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        echo "软件源设置完成"
-    
-    - name: 配置编译选项
-      working-directory: openwrt
+
+    - name: 应用高功率配置
       run: |
-        make defconfig
+        cd openwrt-build
+        echo "下载高功率配置文件..."
+        wget -q -O .config "$HIGH_POWER_CONFIG"
         
+        # 确保选择正确的设备
+        echo "CONFIG_TARGET_MEDIATEK_FILOGIC=y" >> .config
+        echo "CONFIG_TARGET_MEDIATEK_FILOGIC_DEVICE_CMCC_N60_PRO=y" >> .config
+        
+        echo "应用基础配置..."
+        make defconfig
+
+    - name: 配置软件包
+      run: |
+        cd openwrt-build
+        echo "配置软件包..."
+        
+        # 添加必要软件包
         echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-argon-config=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-store=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-istore=y" >> .config
         
-        echo "# CONFIG_PACKAGE_luci-app-adblock is not set" >> .config
-        echo "# CONFIG_PACKAGE_adblock is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-docker is not set" >> .config
-        echo "# CONFIG_PACKAGE_docker is not set" >> .config
-        echo "# CONFIG_PACKAGE_dockerd is not set" >> .config
+        # OpenClash 依赖
+        echo "CONFIG_PACKAGE_bash=y" >> .config
+        echo "CONFIG_PACKAGE_coreutils-nohup=y" >> .config
+        echo "CONFIG_PACKAGE_curl=y" >> .config
         
-        echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
-        echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
-        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_ipv6=y" >> .config
+        # 移除不需要的软件包
+        echo "CONFIG_PACKAGE_luci-app-adblock=n" >> .config
+        echo "CONFIG_PACKAGE_luci-app-docker=n" >> .config
         
+        # 更新配置
         make defconfig
-        echo "编译选项配置完成"
-    
-    - name: 创建自定义配置文件
-      working-directory: openwrt
+
+    - name: 创建默认配置文件
       run: |
-        mkdir -p files/etc/config
-        mkdir -p files/etc/uci-defaults
+        echo "创建默认配置文件..."
+        mkdir -p openwrt-build/files/etc/uci-defaults
         
-        # 网络配置文件
-        cat << 'EOF' > files/etc/config/network
-config interface 'loopback'
-    option device 'lo'
-    option proto 'static'
-    option ipaddr '127.0.0.1'
-    option netmask '255.0.0.0'
-
-config globals 'globals'
-    option ula_prefix 'fdf8:8fc8:8e8c::/48'
-
-config device
-    option name 'br-lan'
-    option type 'bridge'
-    list ports 'eth0'
-
-config interface 'lan'
-    option device 'br-lan'
-    option proto 'static'
-    option ipaddr '192.168.6.1'
-    option netmask '255.255.255.0'
-    option ip6assign '60'
-    option delegate '0'
-
-config interface 'wan'
-    option device 'eth1'
-    option proto 'pppoe'
-    option username '15828860970'
-    option password '147258'
-    option ipv6 'auto'
-    option peerdns '0'
-    list dns '223.5.5.5'
-    list dns '223.6.6.6'
-    option mtu '1492'
-
-config interface 'wan6'
-    option device '@wan'
-    option proto 'dhcpv6'
-    option reqaddress 'try'
-    option reqprefix 'auto'
-EOF
-        
-        # 无线配置文件
-        cat << 'EOF' > files/etc/config/wireless
-config wifi-device 'radio0'
-    option type 'mac80211'
-    option channel 'auto'
-    option hwmode '11a'
-    option path 'pci0000:00/0000:00:00.0'
-    option htmode 'HE160'
-    option band '5g'
-    option disabled '0'
-
-config wifi-iface 'default_radio0'
-    option device 'radio0'
-    option network 'lan'
-    option mode 'ap'
-    option ssid 'locust-5G'
-    option encryption 'psk2'
-    option key '36925888'
-    option isolate '0'
-    option wpa_disable_eapol_key_retries '1'
-
-config wifi-device 'radio1'
-    option type 'mac80211'
-    option channel 'auto'
-    option hwmode '11g'
-    option path 'platform/18000000.wmac'
-    option htmode 'HT40'
-    option band '2g'
-    option disabled '0'
-
-config wifi-iface 'default_radio1'
-    option device 'radio1'
-    option network 'lan'
-    option mode 'ap'
-    option ssid 'locust'
-    option encryption 'psk2'
-    option key '36925888'
-    option isolate '0'
-    option wpa_disable_eapol_key_retries '1'
-EOF
-        
-        # 系统配置文件
-        cat << 'EOF' > files/etc/config/system
-config system
-    option hostname 'locust-router'
-    option timezone 'CST-8'
-    option zonename 'Asia/Shanghai'
-
-config timeserver 'ntp'
-    option enabled '1'
-    list server 'ntp.aliyun.com'
-    list server 'time1.cloud.tencent.com'
-    list server 'cn.ntp.org.cn'
-EOF
-        
-        # DHCP配置文件
-        cat << 'EOF' > files/etc/config/dhcp
-config dnsmasq
-    option domainneeded '1'
-    option boguspriv '1'
-    option filterwin2k '0'
-    option localise_queries '1'
-    option rebind_protection '1'
-    option rebind_localhost '1'
-    option local '/lan/'
-    option domain 'lan'
-    option expandhosts '1'
-    option nonegcache '0'
-    option authoritative '1'
-    option readethers '1'
-    option leasefile '/tmp/dhcp.leases'
-    option resolvfile '/tmp/resolv.conf.d/resolv.conf.auto'
-    option localservice '1'
-    option ednspacket_max '1232'
-    option dhcpv4 'server'
-    option dhcpv6 'server'
-    option ra 'server'
-    option ra_management '1'
-
-config dhcp 'lan'
-    option interface 'lan'
-    option start '100'
-    option limit '150'
-    option leasetime '12h'
-    option dhcpv6 'server'
-    option ra 'server'
-    option ra_management '1'
-    list ra_flags 'managed-config'
-    list ra_flags 'other-config'
-
-config dhcp 'wan'
-    option interface 'wan'
-    option ignore '1'
-EOF
-        
-        # 启动脚本
-        cat << 'EOF' > files/etc/uci-defaults/99-custom-config
+        cat > openwrt-build/files/etc/uci-defaults/99-custom << 'EOF'
 #!/bin/sh
-uci set luci.main.mediaurlbase='/luci-static/argon'
-uci commit luci
+
+# LAN 设置
+uci set network.lan.ipaddr='192.168.6.1'
+uci set network.lan.netmask='255.255.255.0'
+
+# PPPoE 设置
+uci delete network.wan 2>/dev/null || true
+uci set network.wan=interface
+uci set network.wan.proto='pppoe'
+uci set network.wan.username='15828860970'
+uci set network.wan.password='147258'
 uci set network.wan.ipv6='auto'
-uci set network.wan6.proto='dhcpv6'
-uci set network.wan6.reqaddress='try'
-uci set network.wan6.reqprefix='auto'
-uci commit network
-uci set firewall.@defaults[0].drop_invalid='0'
-uci commit firewall
-/etc/init.d/network restart
-/etc/init.d/firewall restart
-rm -f /etc/uci-defaults/99-custom-config
+
+# IPv6 设置
+uci set dhcp.lan.dhcpv6='server'
+uci set dhcp.lan.ra='server'
+
+# WiFi 2.4G
+uci set wireless.default_radio0.ssid='locust'
+uci set wireless.default_radio0.key='36925888'
+uci set wireless.default_radio0.encryption='psk2'
+
+# WiFi 5G
+uci set wireless.default_radio1.ssid='locust-5G'
+uci set wireless.default_radio1.key='36925888'
+uci set wireless.default_radio1.encryption='psk2'
+
+uci commit
 exit 0
 EOF
         
-        chmod +x files/etc/uci-defaults/99-custom-config
-        echo "自定义配置文件创建完成"
-    
-    - name: 下载软件包
-      working-directory: openwrt
+        chmod +x openwrt-build/files/etc/uci-defaults/99-custom
+
+    - name: 下载依赖包
       run: |
-        echo "开始下载软件包..."
-        make download -j$(nproc)
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
-        echo "软件包下载完成"
-    
-    - name: 开始编译固件
-      working-directory: openwrt
-      timeout-minutes: 180
+        cd openwrt-build
+        echo "下载依赖包..."
+        make download -j$(nproc) || make download -j1
+
+    - name: 编译固件
       run: |
-        echo "开始编译固件，使用 $(nproc) 个线程..."
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        cd openwrt-build
         
-        if find bin/targets -name "*.bin" -o -name "*.img" | grep -q .; then
-          echo "status=success" >> $GITHUB_OUTPUT
-          
-          DEVICE_NAME=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' || echo "unknown")
-          echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
-          echo "FILE_DATE=$(date +"%Y%m%d-%H%M")" >> $GITHUB_ENV
-          echo "BUILD_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-          
-          FIRST_FIRMWARE=$(find bin/targets -name "*.bin" -o -name "*.img" | head -1)
-          if [ -n "$FIRST_FIRMWARE" ]; then
-            FIRMWARE_DIR=$(dirname "$FIRST_FIRMWARE")
-            echo "FIRMWARE_DIR=${FIRMWARE_DIR}" >> $GITHUB_ENV
-            echo "找到固件目录: ${FIRMWARE_DIR}"
-          else
-            echo "未找到固件文件"
-            exit 1
-          fi
-        else
-          echo "status=failure" >> $GITHUB_OUTPUT
-          echo "编译失败，请检查日志"
+        if ${{ github.event.inputs.clean_build }}; then
+          echo "执行清理编译..."
+          make clean
+        fi
+        
+        echo "开始编译..."
+        # 尝试并行编译
+        make -j$(nproc) || make -j1 V=s
+        
+        echo "编译完成！查找固件..."
+        find . -name "*.bin" -type f | grep -i "n60pro\|cmcc" | head -10
+
+    - name: 准备固件文件
+      id: prepare-firmware
+      run: |
+        echo "准备固件文件..."
+        
+        # 查找固件文件
+        cd openwrt-build
+        
+        # 查找固件文件（尝试多种可能路径）
+        FIRMWARE_PATH=$(find bin/targets/mediatek/filogic -name "*cmcc_n60pro*sysupgrade.bin" -type f 2>/dev/null | head -1)
+        
+        if [ -z "$FIRMWARE_PATH" ]; then
+          echo "尝试其他路径查找..."
+          FIRMWARE_PATH=$(find . -name "*n60pro*.bin" -type f | head -1)
+        fi
+        
+        if [ -z "$FIRMWARE_PATH" ]; then
+          echo "错误：未找到固件文件！"
+          echo "当前目录结构："
+          find bin/targets/ -name "*.bin" -type f 2>/dev/null | head -20
           exit 1
         fi
-    
-    - name: 整理固件文件
-      if: success()
-      working-directory: openwrt
-      run: |
-        echo "整理固件文件..."
-        cd ${{ env.FIRMWARE_DIR }}
-        echo "当前目录: $(pwd)"
-        echo "目录内容:"
-        ls -la
         
-        rm -rf packages
-        rm -rf *.buildinfo *.manifest
+        echo "找到固件：$FIRMWARE_PATH"
         
-        cat << 'EOF' > README.md
-# OpenWrt 固件说明
+        # 重命名固件
+        FIRMWARE_NAME="immortalwrt-n60pro-highpower-$(date +%Y%m%d-%H%M).bin"
+        cp "$FIRMWARE_PATH" "/tmp/$FIRMWARE_NAME"
+        
+        # 生成校验文件
+        cd /tmp
+        md5sum "$FIRMWARE_NAME" > "$FIRMWARE_NAME.md5"
+        sha256sum "$FIRMWARE_NAME" > "$FIRMWARE_NAME.sha256"
+        
+        # 创建固件信息文件
+        cat > firmware-info.txt << EOF
+设备型号：CMCC N60 PRO
+固件名称：$FIRMWARE_NAME
+编译时间：$(date)
+源码版本：ImmortalWrt 24.10
+配置类型：高功率版本
 
-## 固件信息
-- 编译时间: ${{ env.BUILD_DATE }}
-- 源码版本: immortalwrt-mt798x-24.10
-- 编译分支: ${{ github.event.inputs.branch }}
-- 设备型号: ${{ env.DEVICE_NAME }}
-- 配置类型: 高功率版本
+包含功能：
+- Argon 主题
+- OpenClash
+- iStore
+- PPPoE 拨号预配置
+- IPv6 自动启用
 
-## 包含功能
-1. **主题**: Argon 现代化主题
-2. **插件**: 
-   - OpenClash (科学上网工具)
-   - iStore (应用商店)
-3. **网络配置**:
-   - PPPoE拨号已配置
-   - IPv6自动获取已启用
-   - 管理地址: 192.168.6.1
-4. **无线网络**:
-   - 2.4G WiFi: locust (密码: 36925888)
-   - 5G WiFi: locust-5G (密码: 36925888)
+默认配置：
+- 管理地址：192.168.6.1
+- WiFi 2.4G：locust
+- WiFi 5G：locust-5G
+- WiFi 密码：36925888
+- PPPoE账号：15828860970
+- PPPoE密码：147258
 
-## 路由器配置
-- 管理地址: 192.168.6.1
-- 用户名: root (默认无密码)
-- PPPoE账号: 15828860970
-- PPPoE密码: 147258
+刷机说明：
+1. 在原厂系统选择"系统升级"
+2. 上传本固件文件
+3. 等待重启完成（3-5分钟）
+4. 访问 http://192.168.6.1
 
-## 注意事项
-1. 首次登录请修改默认密码
-2. 建议修改PPPoE密码确保安全
-3. 如需重置配置，可执行 \`firstboot\` 命令
-
-## 文件列表
+注意：仅适用于 CMCC N60 PRO 路由器
 EOF
         
-        echo '```' >> README.md
-        find . -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) | sort >> README.md
-        echo '```' >> README.md
+        echo "固件大小：$(du -h /tmp/$FIRMWARE_NAME | cut -f1)"
+        echo "固件MD5：$(md5sum /tmp/$FIRMWARE_NAME | cut -d' ' -f1)"
         
-        echo "固件整理完成"
-    
-    - name: 创建版本发布到你的GitHub仓库
-      if: success()
-      uses: softprops/action-gh-release@v1
+        # 设置输出变量
+        echo "firmware_name=$FIRMWARE_NAME" >> $GITHUB_OUTPUT
+
+    - name: 上传固件到仓库
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: firmware-${{ env.FILE_DATE }}-${{ env.DEVICE_NAME }}-${{ github.event.inputs.branch }}
-        name: OpenWrt固件 ${{ env.DEVICE_NAME }} ${{ env.FILE_DATE }} (${{ github.event.inputs.branch }})
-        body: |
-          # OpenWrt 237 高功率固件
-          
-          **编译信息**
-          - 编译时间: ${{ env.BUILD_DATE }}
-          - 设备型号: ${{ env.DEVICE_NAME }}
-          - 编译分支: ${{ github.event.inputs.branch }}
-          - 源码: ${{ env.REPO_URL }}
-          
-          **固件特性**
-          - 高功率无线配置
-          - Argon 主题
-          - 包含 OpenClash 插件
-          - 包含 iStore 应用商店
-          - 已配置 PPPoE 拨号
-          - WiFi: locust (2.4G) / locust-5G (5G)
-          - IPv6 支持
-          
-          **路由器配置**
-          - 管理地址: 192.168.6.1
-          - WiFi密码: 36925888
-          - PPPoE账号: 已配置
-          
-          **使用说明**
-          1. 选择对应的固件文件刷入
-          2. 首次启动后检查网络连接
-          3. 如需修改配置，请访问 192.168.6.1
-          
-          **注意事项**
-          - 请勿泄露 PPPoE 账号密码
-          - 建议首次使用后修改密码
-          - 此固件仅适用于特定硬件
-          
-          **文件列表**:
-          ```
-          $(find ${{ env.FIRMWARE_DIR }} -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) | xargs -I {} basename {} | sort)
-          ```
-        draft: false
-        prerelease: false
-        files: |
-          ${{ env.FIRMWARE_DIR }}/*.bin
-          ${{ env.FIRMWARE_DIR }}/*.img
-          ${{ env.FIRMWARE_DIR }}/*.gz
-          ${{ env.FIRMWARE_DIR }}/README.md
-    
-    - name: 清理旧的发布版本
+      run: |
+        echo "上传固件到 ljzz/bianyi 仓库..."
+        
+        # 克隆目标仓库
+        git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/ljzz/bianyi.git firmware-repo
+        cd firmware-repo
+        
+        # 创建或清空 firmware 目录
+        mkdir -p firmware
+        rm -rf firmware/*
+        
+        # 复制固件文件
+        cp /tmp/immortalwrt-n60pro-highpower-*.bin firmware/
+        cp /tmp/*.md5 firmware/ 2>/dev/null || true
+        cp /tmp/*.sha256 firmware/ 2>/dev/null || true
+        cp /tmp/firmware-info.txt firmware/
+        
+        # 创建 README
+        cat > firmware/README.md << 'EOF'
+# N60 PRO 固件仓库
+
+这是为 CMCC N60 PRO 路由器编译的 ImmortalWrt 高功率固件。
+
+## 最新固件
+- **文件**：`immortalwrt-n60pro-highpower-YYYYMMDD-HHMM.bin`
+- **编译时间**：每次手动触发编译时更新
+- **包含插件**：Argon 主题、OpenClash、iStore
+- **默认配置**：已预配置 PPPoE、WiFi、管理地址
+
+## 文件说明
+- `*.bin` - 固件刷机文件
+- `*.md5` - MD5 校验文件
+- `*.sha256` - SHA256 校验文件
+- `firmware-info.txt` - 详细固件信息
+
+## 刷机步骤
+1. 下载最新的 `.bin` 文件
+2. 登录路由器原厂管理界面
+3. 进入"系统升级"页面
+4. 选择下载的固件上传刷入
+5. 等待路由器重启（3-5分钟）
+6. 访问 http://192.168.6.1
+
+## 默认配置
+- 管理地址：192.168.6.1
+- WiFi 2.4G：locust (密码: 36925888)
+- WiFi 5G：locust-5G (密码: 36925888)
+- PPPoE：已预配置账号密码
+
+**注意**：刷机后建议立即修改 PPPoE 密码和 WiFi 密码！
+
+## 历史版本
+历史版本文件会保留在此目录中，可按需下载旧版本。
+EOF
+        
+        # 列出所有固件文件
+        echo "" >> firmware/README.md
+        echo "## 文件列表" >> firmware/README.md
+        echo '```' >> firmware/README.md
+        ls -la firmware/*.bin 2>/dev/null | head -20 >> firmware/README.md
+        echo '```' >> firmware/README.md
+        
+        # 提交更改
+        git config user.name "GitHub Actions Bot"
+        git config user.email "actions@github.com"
+        
+        git add firmware/
+        git commit -m "更新固件: $(date +%Y%m%d-%H%M%S)"
+        git push origin main
+        
+        echo "✅ 固件已成功上传到 https://github.com/ljzz/bianyi/tree/main/firmware"
+
+    - name: 输出结果信息
       if: success()
-      uses: dev-drprasad/delete-older-releases@v0.2.0
-      with:
-        keep_latest: 5
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "🎉 编译完成！"
+        echo ""
+        echo "固件下载地址："
+        echo "https://github.com/ljzz/bianyi/raw/main/firmware/${{ steps.prepare-firmware.outputs.firmware_name }}"
+        echo ""
+        echo "查看所有文件："
+        echo "https://github.com/ljzz/bianyi/tree/main/firmware"
+        echo ""
+        echo "下次编译："
+        echo "1. 访问 https://github.com/ljzz/bianyi/actions"
+        echo "2. 点击『编译 N60 PRO 固件』"
+        echo "3. 点击『Run workflow』"
