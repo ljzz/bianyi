@@ -1,0 +1,485 @@
+name: Build 237 High Power ImmortalWrt
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-immortalwrt.yml'
+      - 'config/**'
+      - 'files/**'
+      - 'scripts/**'
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Clean build (remove caches)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  # 基础配置
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
+  REPO_BRANCH: 2410
+  HIGH_POWER_CONFIG_URL: https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/2410/defconfig/nx60pro-ipailna-high-power.config
+  
+  # 设备配置
+  DEVICE_PROFILE: mediatek_filogic
+  DEVICE_NAME: nix30_snand
+  
+  # 功能配置
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
+  KEEP_LATEST_RELEASES: 5
+  
+  # 网络配置
+  LAN_IP: 192.168.6.1
+  WIFI_SSID: locust
+  WIFI_SSID_5G: locust-5G
+  WIFI_PASSWORD: 36925888
+  PPPOE_USERNAME: 15828860970
+  PPPOE_PASSWORD: 147258
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container:
+      image: p3terx/openwrt-builder:latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        path: builder
+
+    - name: Initialize build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
+          gettext git java-propose-classpath libelf-dev libncurses5-dev \
+          libncursesw5-dev libssl-dev python3 python2.7-dev python3-pip \
+          python3-setuptools python3-dev rsync unzip wget xsltproc zlib1g-dev \
+          subversion mercurial
+
+    - name: Clone source code
+      run: |
+        git clone --depth 1 --branch $REPO_BRANCH $REPO_URL openwrt
+        cd openwrt
+        echo "Src: $(pwd)"
+
+    - name: Download high power configuration
+      run: |
+        cd openwrt
+        wget $HIGH_POWER_CONFIG_URL -O .config
+
+    - name: Update feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Apply custom configurations
+      run: |
+        cd openwrt
+        
+        # 1. 安装 Argon 主题
+        ./scripts/feeds install luci-theme-argon
+        
+        # 2. 安装 OpenClash
+        ./scripts/feeds install luci-app-openclash
+        
+        # 3. 安装 iStore (如果需要，这里假设 iStore 在 feeds 中)
+        ./scripts/feeds install luci-app-store || echo "iStore not found in feeds, will be handled later"
+        
+        # 4. 移除不需要的包
+        sed -i '/CONFIG_PACKAGE_luci-app-adblock/d' .config
+        sed -i '/CONFIG_PACKAGE_luci-app-docker/d' .config
+        sed -i '/CONFIG_PACKAGE_docker/d' .config
+        sed -i '/CONFIG_PACKAGE_dockerd/d' .config
+        
+        # 5. 确保基础功能
+        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+        echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
+        echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
+        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
+        
+        # 6. 禁用不需要的功能，保持纯净
+        echo "# CONFIG_PACKAGE_luci-app-adblock is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-docker is not set" >> .config
+        echo "# CONFIG_PACKAGE_docker is not set" >> .config
+        echo "# CONFIG_PACKAGE_dockerd is not set" >> .config
+
+    - name: Generate custom files
+      run: |
+        cd openwrt
+        
+        # 创建自定义文件目录结构
+        mkdir -p files/etc/config
+        mkdir -p files/etc/uci-defaults
+        mkdir -p files/etc/wireless
+        
+        # 1. 网络配置文件
+        cat > files/etc/config/network << 'EOF'
+config interface 'loopback'
+        option device 'lo'
+        option proto 'static'
+        option ipaddr '127.0.0.1'
+        option netmask '255.0.0.0'
+
+config globals 'globals'
+        option ula_prefix 'fd00:ab:cd::/48'
+
+config device
+        option name 'br-lan'
+        option type 'bridge'
+        list ports 'eth0'
+
+config interface 'lan'
+        option device 'br-lan'
+        option proto 'static'
+        option ipaddr '${{ env.LAN_IP }}'
+        option netmask '255.255.255.0'
+        option ip6assign '60'
+
+config interface 'wan'
+        option device 'eth1'
+        option proto 'pppoe'
+        option username '${{ env.PPPOE_USERNAME }}'
+        option password '${{ env.PPPOE_PASSWORD }}'
+        option ipv6 'auto'
+
+config interface 'wan6'
+        option device 'eth1'
+        option proto 'dhcpv6'
+EOF
+
+        # 2. 无线配置文件
+        cat > files/etc/config/wireless << 'EOF'
+config wifi-device 'radio0'
+        option type 'mac80211'
+        option path 'platform/18000000.wbsys'
+        option channel '36'
+        option band '5g'
+        option htmode 'HE80'
+        option cell_density '0'
+
+config wifi-iface 'default_radio0'
+        option device 'radio0'
+        option network 'lan'
+        option mode 'ap'
+        option ssid '${{ env.WIFI_SSID_5G }}'
+        option encryption 'psk2'
+        option key '${{ env.WIFI_PASSWORD }}'
+        option disabled '0'
+
+config wifi-device 'radio1'
+        option type 'mac80211'
+        option path 'platform/18000000.wbsys'
+        option channel 'auto'
+        option band '2g'
+        option htmode 'HT20'
+        option cell_density '0'
+
+config wifi-iface 'default_radio1'
+        option device 'radio1'
+        option network 'lan'
+        option mode 'ap'
+        option ssid '${{ env.WIFI_SSID }}'
+        option encryption 'psk2'
+        option key '${{ env.WIFI_PASSWORD }}'
+        option disabled '0'
+EOF
+
+        # 3. DHCP 配置文件
+        cat > files/etc/config/dhcp << 'EOF'
+config dnsmasq
+        option domainneeded '1'
+        option boguspriv '1'
+        option filterwin2k '0'
+        option localise_queries '1'
+        option rebind_protection '1'
+        option rebind_localhost '1'
+        option local '/lan/'
+        option domain 'lan'
+        option expandhosts '1'
+        option nonegcache '0'
+        option authoritative '1'
+        option readethers '1'
+        option leasefile '/tmp/dhcp.leases'
+        option resolvfile '/tmp/resolv.conf.d/resolv.conf.auto'
+        option localservice '1'
+        option ednspacket_max '1232'
+
+config dhcp 'lan'
+        option interface 'lan'
+        option start '100'
+        option limit '150'
+        option leasetime '12h'
+        option dhcpv4 'server'
+        option dhcpv6 'server'
+        option ra 'server'
+        option ra_management '1'
+        option ra_default '1'
+
+config dhcp 'wan'
+        option interface 'wan'
+        option ignore '1'
+
+config odhcpd 'odhcpd'
+        option maindhcp '0'
+        option leasefile '/tmp/hosts/odhcpd'
+        option leasetrigger '/usr/sbin/odhcpd-update'
+        option loglevel '4'
+EOF
+
+        # 4. 防火墙配置文件
+        cat > files/etc/config/firewall << 'EOF'
+config defaults
+        option syn_flood '1'
+        option input 'ACCEPT'
+        option output 'ACCEPT'
+        option forward 'REJECT'
+
+config zone
+        option name 'lan'
+        option input 'ACCEPT'
+        option output 'ACCEPT'
+        option forward 'ACCEPT'
+        option network 'lan'
+
+config zone
+        option name 'wan'
+        option input 'REJECT'
+        option output 'ACCEPT'
+        option forward 'REJECT'
+        option masq '1'
+        option mtu_fix '1'
+        option network 'wan wan6'
+
+config forwarding
+        option src 'lan'
+        option dest 'wan'
+
+config rule
+        option name 'Allow-DHCP-Renew'
+        option src 'wan'
+        option proto 'udp'
+        option dest_port '68'
+        option target 'ACCEPT'
+        option family 'ipv4'
+
+config rule
+        option name 'Allow-Ping'
+        option src 'wan'
+        option proto 'icmp'
+        option icmp_type 'echo-request'
+        option family 'ipv4'
+        option target 'ACCEPT'
+
+config rule
+        option name 'Allow-IGMP'
+        option src 'wan'
+        option proto 'igmp'
+        option family 'ipv4'
+        option target 'ACCEPT'
+
+config rule
+        option name 'Allow-DHCPv6'
+        option src 'wan'
+        option proto 'udp'
+        option dest_port '546'
+        option family 'ipv6'
+        option target 'ACCEPT'
+
+config rule
+        option name 'Allow-MLD'
+        option src 'wan'
+        option proto 'icmp'
+        option src_ip 'fe80::/10'
+        list icmp_type '130/0'
+        list icmp_type '131/0'
+        list icmp_type '132/0'
+        list icmp_type '143/0'
+        option family 'ipv6'
+        option target 'ACCEPT'
+
+config rule
+        option name 'Allow-ICMPv6-Input'
+        option src 'wan'
+        option proto 'icmp'
+        list icmp_type 'echo-request'
+        list icmp_type 'echo-reply'
+        list icmp_type 'destination-unreachable'
+        list icmp_type 'packet-too-big'
+        list icmp_type 'time-exceeded'
+        list icmp_type 'bad-header'
+        list icmp_type 'unknown-header-type'
+        list icmp_type 'router-solicitation'
+        list icmp_type 'neighbour-solicitation'
+        list icmp_type 'router-advertisement'
+        list icmp_type 'neighbour-advertisement'
+        option limit '1000/sec'
+        option family 'ipv6'
+        option target 'ACCEPT'
+
+config rule
+        option name 'Allow-ICMPv6-Forward'
+        option src 'wan'
+        option dest '*'
+        option proto 'icmp'
+        list icmp_type 'echo-request'
+        list icmp_type 'echo-reply'
+        list icmp_type 'destination-unreachable'
+        list icmp_type 'packet-too-big'
+        list icmp_type 'time-exceeded'
+        list icmp_type 'bad-header'
+        list icmp_type 'unknown-header-type'
+        option limit '1000/sec'
+        option family 'ipv6'
+        option target 'ACCEPT'
+EOF
+
+        # 5. 系统配置文件
+        cat > files/etc/config/system << 'EOF'
+config system
+        option hostname 'ImmortalWrt'
+        option timezone 'CST-8'
+        option ttylogin '0'
+        option log_size '64'
+        option urandom_seed '0'
+
+config timeserver 'ntp'
+        list server 'time1.cloud.tencent.com'
+        list server 'time2.cloud.tencent.com'
+        list server 'time3.cloud.tencent.com'
+        list server 'pool.ntp.org'
+        option enabled '1'
+        option enable_server '0'
+EOF
+
+        # 6. 默认脚本 - 设置默认主题为 Argon
+        cat > files/etc/uci-defaults/99-custom << 'EOF'
+#!/bin/sh
+
+# 设置 Argon 为默认主题
+uci set luci.main.mediaurlbase='/luci-static/argon'
+uci commit luci
+
+# 设置时区
+uci set system.@system[0].timezone='CST-8'
+uci set system.@system[0].zonename='Asia/Shanghai'
+uci commit system
+
+# 启用 IPv6
+uci set network.wan6=interface
+uci set network.wan6.proto='dhcpv6'
+uci set network.wan6.device='eth1'
+uci set network.wan6.reqaddress='try'
+uci set network.wan6.reqprefix='auto'
+uci commit network
+
+echo "Custom configuration applied successfully"
+exit 0
+EOF
+
+        chmod +x files/etc/uci-defaults/99-custom
+
+    - name: Finalize configuration
+      run: |
+        cd openwrt
+        
+        # 更新配置
+        make defconfig
+        
+        # 检查配置
+        echo "Current configuration summary:"
+        grep -E "CONFIG_PACKAGE_luci|CONFIG_PACKAGE_ipv6" .config || true
+        
+        # 下载所有依赖包
+        make download -j$(nproc) || make download -j1 || make download -j1 V=s
+
+    - name: Build firmware
+      timeout-minutes: 120
+      run: |
+        cd openwrt
+        
+        # 清除之前的编译结果（如果需要）
+        if [ "${{ inputs.clean_build || 'false' }}" = "true" ]; then
+          make clean
+        fi
+        
+        # 开始编译，使用所有CPU核心
+        echo "Starting compilation with $(nproc) threads"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        
+        # 检查编译结果
+        if [ -f bin/targets/*/*/*.bin ]; then
+          echo "Build successful!"
+          ls -la bin/targets/*/*/*.bin
+        else
+          echo "Build failed!"
+          exit 1
+        fi
+
+    - name: Prepare artifacts
+      if: success()
+      run: |
+        cd openwrt/bin/targets/*/*
+        
+        # 创建固件信息文件
+        FIRMWARE_FILE=$(ls -1 *.bin | head -1)
+        echo "固件信息:" > firmware-info.txt
+        echo "编译时间: $(date '+%Y-%m-%d %H:%M:%S')" >> firmware-info.txt
+        echo "固件文件: $FIRMWARE_FILE" >> firmware-info.txt
+        echo "设备型号: ${{ env.DEVICE_NAME }}" >> firmware-info.txt
+        echo "内核版本: 6.6" >> firmware-info.txt
+        echo "" >> firmware-info.txt
+        echo "内置功能:" >> firmware-info.txt
+        echo "- Argon 主题" >> firmware-info.txt
+        echo "- OpenClash 插件" >> firmware-info.txt
+        echo "- iStore 应用商店" >> firmware-info.txt
+        echo "- IPv6 支持" >> firmware-info.txt
+        echo "" >> firmware-info.txt
+        echo "网络配置:" >> firmware-info.txt
+        echo "管理地址: ${{ env.LAN_IP }}" >> firmware-info.txt
+        echo "2.4G WiFi: ${{ env.WIFI_SSID }}" >> firmware-info.txt
+        echo "5G WiFi: ${{ env.WIFI_SSID_5G }}" >> firmware-info.txt
+        echo "WiFi密码: ${{ env.WIFI_PASSWORD }}" >> firmware-info.txt
+        echo "PPPoE账号: ${{ env.PPPOE_USERNAME }}" >> firmware-info.txt
+        
+        # 设置输出变量
+        echo "FIRMWARE_PATH=$(pwd)" >> $GITHUB_ENV
+        echo "FIRMWARE_FILE=$FIRMWARE_FILE" >> $GITHUB_ENV
+
+    - name: Upload firmware as artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: immortalwrt-firmware-${{ env.DEVICE_NAME }}
+        path: |
+          ${{ env.FIRMWARE_PATH }}/*.bin
+          ${{ env.FIRMWARE_PATH }}/firmware-info.txt
+        retention-days: 7
+
+    - name: Create GitHub Release
+      if: success() && env.UPLOAD_RELEASE == 'true'
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: firmware-${{ env.DEVICE_NAME }}-$(date +'%Y%m%d-%H%M')
+        name: "ImmortalWrt 高功率固件 $(date +'%Y-%m-%d %H:%M')"
+        body_path: ${{ env.FIRMWARE_PATH }}/firmware-info.txt
+        files: |
+          ${{ env.FIRMWARE_PATH }}/*.bin
+        draft: false
+        prerelease: false
+
+    - name: Clean up old releases
+      if: success() && env.UPLOAD_RELEASE == 'true'
+      uses: dev-drprasad/delete-older-releases@v0.2.0
+      with:
+        keep_latest: ${{ env.KEEP_LATEST_RELEASES }}
+        delete_tag_pattern: firmware-${{ env.DEVICE_NAME }}-*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
