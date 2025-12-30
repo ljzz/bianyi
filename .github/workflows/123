@@ -1,11 +1,10 @@
 name: 编译 N60 PRO 高功率固件
 
 on:
-  # 仅手动触发，无定时任务
   workflow_dispatch:
     inputs:
       clean_build:
-        description: '执行完整清理编译（耗时更长）'
+        description: '执行完整清理编译'
         required: false
         default: false
         type: boolean
@@ -18,7 +17,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 180
 
     steps:
     - name: 检查仓库代码
@@ -33,164 +32,229 @@ jobs:
 
     - name: 克隆源码
       run: |
+        echo "正在克隆源码..."
         git clone --depth 1 --branch main $FIRMWARE_SOURCE immortalwrt
         cd immortalwrt
+        echo "更新feeds..."
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
     - name: 应用高功率配置
       run: |
         cd immortalwrt
-        # 使用 raw.githubusercontent.com 直接获取配置文件
+        echo "下载高功率配置文件..."
         wget -q -O .config "$HIGH_POWER_CONFIG"
+        echo "应用默认配置..."
         make defconfig
+        
+        # 确认目标设备
+        grep "CONFIG_TARGET_MEDIATEK_FILOGIC=y" .config && echo "✓ Filogic平台已启用"
+        grep "CONFIG_TARGET_MEDIATEK_FILOGIC_DEVICE_CMCC_N60_PRO=y" .config && echo "✓ N60 PRO设备已选中"
 
     - name: 自定义软件包选择
       run: |
         cd immortalwrt
-        # 必需的主题和插件
-        echo "CONFIG_PACKAGE_luci-theme-argon=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-istore=y" >> .config
+        echo "应用自定义软件包配置..."
         
-        # OpenClash 核心依赖
-        echo "CONFIG_PACKAGE_bash=y" >> .config
-        echo "CONFIG_PACKAGE_coreutils-nohup=y" >> .config
-        echo "CONFIG_PACKAGE_curl=y" >> .config
+        # 必需软件包
+        cat >> .config << 'EOF'
+CONFIG_PACKAGE_luci-theme-argon=y
+CONFIG_PACKAGE_luci-app-openclash=y
+CONFIG_PACKAGE_luci-app-istore=y
+CONFIG_PACKAGE_luci-i18n-istore-zh-cn=y
+CONFIG_PACKAGE_bash=y
+CONFIG_PACKAGE_coreutils-nohup=y
+CONFIG_PACKAGE_curl=y
+EOF
         
-        # 移除不需要的包
-        echo "CONFIG_PACKAGE_luci-app-adblock=n" >> .config
-        echo "CONFIG_PACKAGE_luci-app-docker=n" >> .config
-        echo "CONFIG_PACKAGE_docker=n" >> .config
+        # 移除不需要的软件包
+        cat >> .config << 'EOF'
+CONFIG_PACKAGE_luci-app-adblock=n
+CONFIG_PACKAGE_luci-app-docker=n
+CONFIG_PACKAGE_docker=n
+CONFIG_PACKAGE_dockerd=n
+EOF
         
-        # 清理冲突包
+        # 清理可能的冲突
         sed -i '/CONFIG_PACKAGE_luci-app-passwall/d' .config
         sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus/d' .config
         
+        echo "更新配置..."
         make defconfig
 
     - name: 创建默认配置文件
       run: |
+        echo "创建默认配置文件..."
         mkdir -p immortalwrt/files/etc/uci-defaults
         
         cat > immortalwrt/files/etc/uci-defaults/99-custom << 'EOF'
-        #!/bin/sh
-        # LAN 设置
-        uci set network.lan.ipaddr='192.168.6.1'
-        
-        # PPPoE
-        uci set network.wan.proto='pppoe'
-        uci set network.wan.username='15828860970'
-        uci set network.wan.password='147258'
-        
-        # IPv6
-        uci set network.wan.ipv6='auto'
-        uci set dhcp.lan.dhcpv6='server'
-        uci set dhcp.lan.ra='server'
-        
-        # WiFi 2.4G
-        uci set wireless.default_radio0.ssid='locust'
-        uci set wireless.default_radio0.key='36925888'
-        
-        # WiFi 5G
-        uci set wireless.default_radio1.ssid='locust-5G'
-        uci set wireless.default_radio1.key='36925888'
-        
-        uci commit
-        exit 0
-        EOF
+#!/bin/sh
+# 自定义配置脚本
+
+# LAN设置
+uci set network.lan.ipaddr='192.168.6.1'
+uci set network.lan.netmask='255.255.255.0'
+
+# WAN - PPPoE
+uci delete network.wan 2>/dev/null
+uci delete network.wan6 2>/dev/null
+
+uci set network.wan=interface
+uci set network.wan.proto='pppoe'
+uci set network.wan.username='15828860970'
+uci set network.wan.password='147258'
+uci set network.wan.ipv6='auto'
+uci set network.wan.metric='10'
+
+# IPv6设置
+uci set dhcp.lan.dhcpv6='server'
+uci set dhcp.lan.ra='server'
+uci set dhcp.lan.ra_management='1'
+
+# 2.4G WiFi
+uci set wireless.radio0.channel='auto'
+uci set wireless.radio0.htmode='HE40'
+uci set wireless.default_radio0.ssid='locust'
+uci set wireless.default_radio0.encryption='psk2'
+uci set wireless.default_radio0.key='36925888'
+
+# 5G WiFi
+uci set wireless.radio1.channel='auto'
+uci set wireless.radio1.htmode='HE160'
+uci set wireless.default_radio1.ssid='locust-5G'
+uci set wireless.default_radio1.encryption='psk2'
+uci set wireless.default_radio1.key='36925888'
+
+uci commit network
+uci commit wireless
+uci commit dhcp
+
+exit 0
+EOF
         
         chmod +x immortalwrt/files/etc/uci-defaults/99-custom
 
     - name: 下载依赖
       run: |
         cd immortalwrt
+        echo "下载依赖包..."
         make download -j$(nproc) || make download -j1
+        echo "依赖下载完成"
 
     - name: 编译固件
       run: |
         cd immortalwrt
+        
         if ${{ github.event.inputs.clean_build }}; then
           echo "执行完整清理编译..."
           make clean
-          make dirclean
         fi
         
-        echo "开始编译..."
-        make -j$(nproc) || make -j1 V=s
+        echo "开始编译固件..."
+        # 尝试并行编译，失败时回退到单线程详细模式
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        
+        echo "编译完成！"
+        echo "输出目录内容："
+        ls -la bin/targets/ || echo "bin/targets目录不存在"
+        find . -name "*n60pro*" -type f | head -10 || echo "未找到n60pro相关文件"
 
-    - name: 准备发布文件
+    - name: 查找并验证固件文件
       run: |
-        cd immortalwrt/bin/targets/mediatek/filogic/*/
+        cd immortalwrt
         
         # 查找固件文件
-        for file in *sysupgrade.bin; do
-          if [ -f "$file" ]; then
-            # 重命名固件
-            new_name="immortalwrt-n60pro-$(date +%Y%m%d-%H%M).bin"
-            cp "$file" "$new_name"
-            
-            # 生成校验文件
-            md5sum "$new_name" > "$new_name.md5"
-            sha256sum "$new_name" > "$new_name.sha256"
-            
-            echo "固件已准备: $new_name"
-          fi
-        done
+        echo "查找固件文件..."
+        FIND_RESULT=$(find bin/targets/ -name "*.bin" -type f 2>/dev/null | grep -i "n60pro\|cmcc" | head -5 || true)
+        
+        if [ -z "$FIND_RESULT" ]; then
+          echo "未找到固件文件，检查所有bin文件..."
+          find bin/targets/ -name "*.bin" -type f 2>/dev/null | head -10
+          echo "完整目录结构："
+          find bin/targets/ -type f 2>/dev/null | head -20
+        else
+          echo "找到固件文件："
+          echo "$FIND_RESULT"
+          
+          # 复制到固定位置供后续使用
+          mkdir -p /tmp/firmware-output
+          for file in $FIND_RESULT; do
+            if [[ "$file" == *sysupgrade* ]]; then
+              cp "$file" /tmp/firmware-output/
+              echo "已复制: $(basename "$file")"
+            fi
+          done
+          
+          ls -la /tmp/firmware-output/
+        fi
 
-    - name: 上传到仓库分支
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # 克隆你的仓库
-        git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/ljzz/bianyi.git release-repo
-        cd release-repo
-        
-        # 准备固件目录
-        mkdir -p firmware/n60pro/$(date +%Y%m%d)
-        cp -r ../../immortalwrt/bin/targets/mediatek/filogic/*/* firmware/n60pro/$(date +%Y%m%d)/
-        
-        # 更新索引文件
-        echo "# N60 PRO 固件存档" > firmware/README.md
-        echo "最新编译: $(date)" >> firmware/README.md
-        echo "" >> firmware/README.md
-        find firmware/n60pro -name "*.bin" | sort -r >> firmware/README.md
-        
-        # 提交更新
-        git config user.name "GitHub Actions"
-        git config user.email "actions@github.com"
-        git add .
-        git commit -m "添加固件: $(date +%Y%m%d-%H%M%S)"
-        git push origin main
-
-    - name: 创建发布版本
-      uses: softprops/action-gh-release@v1
+    - name: 上传到Release
       if: success()
+      uses: softprops/action-gh-release@v1
       with:
-        files: immortalwrt/bin/targets/mediatek/filogic/*/*
+        files: /tmp/firmware-output/*.bin
         tag_name: "n60pro-$(date +%Y%m%d-%H%M)"
-        name: "N60 PRO 固件 $(date +'%Y年%m月%d日 %H:%M')"
+        name: "N60 PRO 固件 $(date +'%Y-%m-%d %H:%M')"
         body: |
-          ## 手动编译的 N60 PRO 高功率固件
+          ## CMCC N60 PRO 高功率固件
           
-          **编译时间**: $(date)
-          
-          **配置摘要**:
-          - 设备: CMCC N60 PRO
+          **编译信息**
+          - 时间: $(date)
           - 源码: ImmortalWrt 24.10
           - 配置: 高功率版本
-          - 包含: Argon 主题, OpenClash, iStore
-          - 排除: AdBlock, Docker
+          - 触发: 手动编译
           
-          **网络预设**:
+          **内置功能**
+          - ✅ Argon 主题
+          - ✅ OpenClash
+          - ✅ iStore
+          - ❌ AdBlock (已移除)
+          - ❌ Docker (已移除)
+          
+          **默认配置**
           - 管理地址: 192.168.6.1
-          - WiFi 2.4G: locust
-          - WiFi 5G: locust-5G
-          - 统一密码: 36925888
-          - PPPoE 已预配
+          - WiFi 2.4G: locust (36925888)
+          - WiFi 5G: locust-5G (36925888)
+          - PPPoE: 已预配置
+          - IPv6: 自动启用
           
-          **刷机注意**: 仅适用于 N60 PRO 原厂系统升级！
+          **刷机说明**
+          1. 在原厂系统进入"系统升级"
+          2. 选择本固件文件上传
+          3. 等待3-5分钟重启
+          4. 访问 http://192.168.6.1
+          
+          **注意事项**
+          - 仅适用于CMCC N60 PRO路由器
+          - 刷机前请备份重要数据
+          - PPPoE账号密码已内置，请及时修改
+          
+          **文件校验**
+          下载后请验证MD5值以确保完整性。
         draft: false
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 上传编译日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs-$(date +%Y%m%d-%H%M%S)
+        path: |
+          immortalwrt/logs/
+          /tmp/firmware-output/
+        retention-days: 7
+
+    - name: 编译失败通知
+      if: failure()
+      run: |
+        echo "编译失败！请检查以下可能的原因："
+        echo "1. 源码仓库可能更新，需要调整配置"
+        echo "2. 依赖包下载失败"
+        echo "3. 软件包冲突"
+        echo ""
+        echo "查看完整日志："
+        echo "1. 点击上方'build-logs'下载日志"
+        echo "2. 检查'编译固件'步骤的输出"
+        echo "3. 查看immortalwrt目录下的编译日志"
