@@ -4,8 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-  schedule:
-    - cron: '0 2 * * 0'
 
 jobs:
   build:
@@ -52,140 +50,119 @@ jobs:
         echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
         echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
 
-    - name: Create config script
+    - name: Create config files
       run: |
         cd immortalwrt-mt798x
+        mkdir -p files/etc/config
+        mkdir -p files/etc/uci-defaults
         
-        # 创建一个Python脚本来生成配置文件
-        cat > create_configs.py << "PYEOF"
-import os
+        # 创建网络配置文件 - 使用echo逐行写入
+        echo "config interface 'loopback'" > files/etc/config/network
+        echo "    option device 'lo'" >> files/etc/config/network
+        echo "    option proto 'static'" >> files/etc/config/network
+        echo "    option ipaddr '127.0.0.1'" >> files/etc/config/network
+        echo "    option netmask '255.0.0.0'" >> files/etc/config/network
+        echo "" >> files/etc/config/network
+        echo "config globals 'globals'" >> files/etc/config/network
+        echo "    option ula_prefix 'fd10:db8:1234::/48'" >> files/etc/config/network
+        echo "" >> files/etc/config/network
+        echo "config device" >> files/etc/config/network
+        echo "    option name 'br-lan'" >> files/etc/config/network
+        echo "    option type 'bridge'" >> files/etc/config/network
+        echo "    list ports 'eth0'" >> files/etc/config/network
+        echo "" >> files/etc/config/network
+        echo "config interface 'lan'" >> files/etc/config/network
+        echo "    option device 'br-lan'" >> files/etc/config/network
+        echo "    option proto 'static'" >> files/etc/config/network
+        echo "    option ipaddr '192.168.6.1'" >> files/etc/config/network
+        echo "    option netmask '255.255.255.0'" >> files/etc/config/network
+        echo "    option ip6assign '60'" >> files/etc/config/network
+        echo "" >> files/etc/config/network
+        echo "config interface 'wan'" >> files/etc/config/network
+        echo "    option device 'eth1'" >> files/etc/config/network
+        echo "    option proto 'pppoe'" >> files/etc/config/network
+        echo "    option username '15828860970'" >> files/etc/config/network
+        echo "    option password '147258'" >> files/etc/config/network
+        echo "    option ipv6 'auto'" >> files/etc/config/network
 
-# 创建目录
-os.makedirs("files/etc/config", exist_ok=True)
-os.makedirs("files/etc/uci-defaults", exist_ok=True)
+        # 创建无线配置文件
+        echo "config wifi-device 'radio0'" > files/etc/config/wireless
+        echo "    option type 'mac80211'" >> files/etc/config/wireless
+        echo "    option path 'platform/18000000.wmac'" >> files/etc/config/wireless
+        echo "    option channel '36'" >> files/etc/config/wireless
+        echo "    option band '5g'" >> files/etc/config/wireless
+        echo "    option htmode 'HE80'" >> files/etc/config/wireless
+        echo "    option disabled '0'" >> files/etc/config/wireless
+        echo "" >> files/etc/config/wireless
+        echo "config wifi-iface 'default_radio0'" >> files/etc/config/wireless
+        echo "    option device 'radio0'" >> files/etc/config/wireless
+        echo "    option network 'lan'" >> files/etc/config/wireless
+        echo "    option mode 'ap'" >> files/etc/config/wireless
+        echo "    option ssid 'locust-5G'" >> files/etc/config/wireless
+        echo "    option encryption 'psk2'" >> files/etc/config/wireless
+        echo "    option key '36925888'" >> files/etc/config/wireless
+        echo "" >> files/etc/config/wireless
+        echo "config wifi-device 'radio1'" >> files/etc/config/wireless
+        echo "    option type 'mac80211'" >> files/etc/config/wireless
+        echo "    option path 'platform/18000000.wmac'" >> files/etc/config/wireless
+        echo "    option channel 'auto'" >> files/etc/config/wireless
+        echo "    option band '2g'" >> files/etc/config/wireless
+        echo "    option htmode 'HE20'" >> files/etc/config/wireless
+        echo "    option disabled '0'" >> files/etc/config/wireless
+        echo "" >> files/etc/config/wireless
+        echo "config wifi-iface 'default_radio1'" >> files/etc/config/wireless
+        echo "    option device 'radio1'" >> files/etc/config/wireless
+        echo "    option network 'lan'" >> files/etc/config/wireless
+        echo "    option mode 'ap'" >> files/etc/config/wireless
+        echo "    option ssid 'locust'" >> files/etc/config/wireless
+        echo "    option encryption 'psk2'" >> files/etc/config/wireless
+        echo "    option key '36925888'" >> files/etc/config/wireless
 
-# 网络配置
-with open("files/etc/config/network", "w") as f:
-    f.write("""config interface 'loopback'
-    option device 'lo'
-    option proto 'static'
-    option ipaddr '127.0.0.1'
-    option netmask '255.0.0.0'
+        # 创建系统配置文件
+        echo "config system" > files/etc/config/system
+        echo "    option hostname 'ImmortalWrt'" >> files/etc/config/system
+        echo "    option timezone 'CST-8'" >> files/etc/config/system
+        echo "    option zonename 'Asia/Shanghai'" >> files/etc/config/system
+        echo "" >> files/etc/config/system
+        echo "config timeserver 'ntp'" >> files/etc/config/system
+        echo "    list server 'ntp.aliyun.com'" >> files/etc/config/system
+        echo "    list server 'time1.cloud.tencent.com'" >> files/etc/config/system
+        echo "    list server 'cn.pool.ntp.org'" >> files/etc/config/system
+        echo "    option enabled '1'" >> files/etc/config/system
 
-config globals 'globals'
-    option ula_prefix 'fd10:db8:1234::/48'
+        # 创建防火墙配置文件
+        echo "config defaults" > files/etc/config/firewall
+        echo "    option syn_flood '1'" >> files/etc/config/firewall
+        echo "    option input 'ACCEPT'" >> files/etc/config/firewall
+        echo "    option output 'ACCEPT'" >> files/etc/config/firewall
+        echo "    option forward 'REJECT'" >> files/etc/config/firewall
+        echo "" >> files/etc/config/firewall
+        echo "config zone" >> files/etc/config/firewall
+        echo "    option name 'lan'" >> files/etc/config/firewall
+        echo "    option input 'ACCEPT'" >> files/etc/config/firewall
+        echo "    option output 'ACCEPT'" >> files/etc/config/firewall
+        echo "    option forward 'ACCEPT'" >> files/etc/config/firewall
+        echo "    option network 'lan'" >> files/etc/config/firewall
+        echo "" >> files/etc/config/firewall
+        echo "config zone" >> files/etc/config/firewall
+        echo "    option name 'wan'" >> files/etc/config/firewall
+        echo "    option input 'REJECT'" >> files/etc/config/firewall
+        echo "    option output 'ACCEPT'" >> files/etc/config/firewall
+        echo "    option forward 'REJECT'" >> files/etc/config/firewall
+        echo "    option masq '1'" >> files/etc/config/firewall
+        echo "    option mtu_fix '1'" >> files/etc/config/firewall
+        echo "    option network 'wan'" >> files/etc/config/firewall
+        echo "" >> files/etc/config/firewall
+        echo "config forwarding" >> files/etc/config/firewall
+        echo "    option src 'lan'" >> files/etc/config/firewall
+        echo "    option dest 'wan'" >> files/etc/config/firewall
 
-config device
-    option name 'br-lan'
-    option type 'bridge'
-    list ports 'eth0'
-
-config interface 'lan'
-    option device 'br-lan'
-    option proto 'static'
-    option ipaddr '192.168.6.1'
-    option netmask '255.255.255.0'
-    option ip6assign '60'
-
-config interface 'wan'
-    option device 'eth1'
-    option proto 'pppoe'
-    option username '15828860970'
-    option password '147258'
-    option ipv6 'auto'
-""")
-
-# 无线配置
-with open("files/etc/config/wireless", "w") as f:
-    f.write("""config wifi-device 'radio0'
-    option type 'mac80211'
-    option path 'platform/18000000.wmac'
-    option channel '36'
-    option band '5g'
-    option htmode 'HE80'
-    option disabled '0'
-
-config wifi-iface 'default_radio0'
-    option device 'radio0'
-    option network 'lan'
-    option mode 'ap'
-    option ssid 'locust-5G'
-    option encryption 'psk2'
-    option key '36925888'
-
-config wifi-device 'radio1'
-    option type 'mac80211'
-    option path 'platform/18000000.wmac'
-    option channel 'auto'
-    option band '2g'
-    option htmode 'HE20'
-    option disabled '0'
-
-config wifi-iface 'default_radio1'
-    option device 'radio1'
-    option network 'lan'
-    option mode 'ap'
-    option ssid 'locust'
-    option encryption 'psk2'
-    option key '36925888'
-""")
-
-# 系统配置
-with open("files/etc/config/system", "w") as f:
-    f.write("""config system
-    option hostname 'ImmortalWrt'
-    option timezone 'CST-8'
-    option zonename 'Asia/Shanghai'
-
-config timeserver 'ntp'
-    list server 'ntp.aliyun.com'
-    list server 'time1.cloud.tencent.com'
-    list server 'cn.pool.ntp.org'
-    option enabled '1'
-""")
-
-# 防火墙配置
-with open("files/etc/config/firewall", "w") as f:
-    f.write("""config defaults
-    option syn_flood '1'
-    option input 'ACCEPT'
-    option output 'ACCEPT'
-    option forward 'REJECT'
-
-config zone
-    option name 'lan'
-    option input 'ACCEPT'
-    option output 'ACCEPT'
-    option forward 'ACCEPT'
-    option network 'lan'
-
-config zone
-    option name 'wan'
-    option input 'REJECT'
-    option output 'ACCEPT'
-    option forward 'REJECT'
-    option masq '1'
-    option mtu_fix '1'
-    option network 'wan'
-
-config forwarding
-    option src 'lan'
-    option dest 'wan'
-""")
-
-# 自定义配置脚本
-with open("files/etc/uci-defaults/99-custom-config", "w") as f:
-    f.write("""#!/bin/sh
-uci set luci.main.mediaurlbase='/luci-static/argon'
-uci commit luci
-exit 0
-""")
-os.chmod("files/etc/uci-defaults/99-custom-config", 0o755)
-
-print("配置文件创建完成")
-PYEOF
-        
-        python3 create_configs.py
+        # 创建自定义配置脚本
+        echo "#!/bin/sh" > files/etc/uci-defaults/99-custom-config
+        echo "uci set luci.main.mediaurlbase='/luci-static/argon'" >> files/etc/uci-defaults/99-custom-config
+        echo "uci commit luci" >> files/etc/uci-defaults/99-custom-config
+        echo "exit 0" >> files/etc/uci-defaults/99-custom-config
+        chmod +x files/etc/uci-defaults/99-custom-config
 
     - name: Build firmware
       run: |
@@ -201,77 +178,6 @@ PYEOF
         cp -r bin/targets/* ../firmware-build/
         echo "固件准备完成"
 
-    - name: Create README script
-      run: |
-        cd immortalwrt-mt798x
-        
-        # 创建README生成脚本
-        cat > create_readme.py << "PYEOF"
-import os
-from datetime import datetime
-
-date_str = datetime.now().strftime("%Y%m%d")
-
-# 创建目录
-os.makedirs(f"../firmware/{date_str}", exist_ok=True)
-
-# 创建日期目录README
-readme_content = f"""# ImmortalWrt 自定义固件
-
-## 构建信息
-- 构建时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-- 源码版本: padavanonly/immortalwrt-mt798x-24.10
-- 配置文件: nx60pro-ipailna-high-power.config
-
-## 包含功能
-- 高功率版本固件
-- Argon主题
-- OpenClash插件
-- iStore应用商店
-- 已移除AdBlock和Docker
-- 预配置PPPoE拨号
-- WiFi名称: locust / locust-5G
-- 管理地址: 192.168.6.1
-- IPv6自动配置
-
-## 刷机说明
-请根据设备型号选择对应的固件文件刷入。
-"""
-
-with open(f"../firmware/{date_str}/README.md", "w") as f:
-    f.write(readme_content)
-
-# 创建总README
-main_readme = """# ImmortalWrt 固件仓库
-
-此仓库存放自定义编译的ImmortalWrt固件。
-
-## 目录结构
-- latest/ - 最新编译的固件
-- YYYYMMDD/ - 按日期组织的固件版本
-
-## 构建配置
-固件基于以下配置编译：
-- 源码: https://github.com/padavanonly/immortalwrt-mt798x-24.10
-- 配置文件: nx60pro-ipailna-high-power.config
-- 包含: Argon主题, OpenClash, iStore
-- 排除: AdBlock, Docker
-
-## 使用说明
-1. 下载对应设备型号的固件
-2. 通过设备管理界面刷入
-3. 默认管理地址: 192.168.6.1
-4. WiFi: locust / locust-5G (密码: 36925888)
-"""
-
-with open("../firmware/README.md", "w") as f:
-    f.write(main_readme)
-
-print("README文件创建完成")
-PYEOF
-        
-        python3 create_readme.py
-
     - name: Upload firmware to repository
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -283,16 +189,33 @@ PYEOF
         
         git pull origin firmware --allow-unrelated-histories 2>/dev/null || true
         
+        mkdir -p firmware
+        
         # 复制固件文件
-        cp -r ../firmware-build/* ../firmware/
+        cp -r ../firmware-build/* firmware/
         
-        # 创建最新固件链接
-        rm -rf ../firmware/latest
-        date_str=$(date +%Y%m%d)
-        cp -r ../firmware/$date_str ../firmware/latest
+        # 创建README文件
+        echo "# ImmortalWrt 自定义固件" > firmware/README.md
+        echo "" >> firmware/README.md
+        echo "## 构建信息" >> firmware/README.md
+        echo "- 构建时间: $(date)" >> firmware/README.md
+        echo "- 源码版本: padavanonly/immortalwrt-mt798x-24.10" >> firmware/README.md
+        echo "- 配置文件: nx60pro-ipailna-high-power.config" >> firmware/README.md
+        echo "" >> firmware/README.md
+        echo "## 包含功能" >> firmware/README.md
+        echo "- 高功率版本固件" >> firmware/README.md
+        echo "- Argon主题" >> firmware/README.md
+        echo "- OpenClash插件" >> firmware/README.md
+        echo "- iStore应用商店" >> firmware/README.md
+        echo "- 已移除AdBlock和Docker" >> firmware/README.md
+        echo "- 预配置PPPoE拨号" >> firmware/README.md
+        echo "- WiFi名称: locust / locust-5G" >> firmware/README.md
+        echo "- 管理地址: 192.168.6.1" >> firmware/README.md
+        echo "- IPv6自动配置" >> firmware/README.md
+        echo "" >> firmware/README.md
+        echo "## 刷机说明" >> firmware/README.md
+        echo "请根据设备型号选择对应的固件文件刷入。" >> firmware/README.md
         
-        # 提交更改
-        cd ..
         git add firmware/
         git commit -m "添加固件构建 $(date +%Y%m%d-%H%M%S)" || echo "没有更改可提交"
         git push origin firmware
